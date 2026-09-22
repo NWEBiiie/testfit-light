@@ -275,5 +275,17 @@
     if(!closed||points.length<3||points.length>100||!G.simple(points))throw Error('Use a closed, non-crossing boundary with 3–100 corners.');
     return points;
   }
-  return {selectRooms,extendWall,moveWall,remapDoors,cornerExclusion,setCornerExclusion,svgStraightPath};
+  function jsonBoundaryCandidates(value){
+    const entries=Array.isArray(value)?[{points:value}]:Array.isArray(value?.boundaries)?value.boundaries:value?.boundary?[value.boundary]:[value];
+    if(!entries.length||entries.length>100)throw Error('JSON must contain 1–100 boundaries.');
+    return entries.map((entry,i)=>{
+      const source=Array.isArray(entry)?entry:entry?.points;
+      if(!Array.isArray(source)||source.length<3||source.length>101)throw Error('Boundary '+(i+1)+': use 3–100 points as {x,y} or [x,y].');
+      const points=source.map(p=>{const x=Array.isArray(p)?p[0]:p?.x,y=Array.isArray(p)?p[1]:p?.y;if(typeof x!=='number'||typeof y!=='number'||![x,y].every(v=>Number.isFinite(v)&&Math.abs(v)<1e5))throw Error('Boundary '+(i+1)+': coordinates must be finite numbers in feet.');return {x,y};});
+      if(G.distance(points[0],points.at(-1))<1e-7)points.pop();
+      if(points.length>100||!G.simple(points))throw Error('Boundary '+(i+1)+': outline must not cross itself and must enclose more than 1 square foot.');
+      return {name:typeof entry?.name==='string'?entry.name:'JSON boundary '+(i+1),points};
+    });
+  }
+  return {selectRooms,extendWall,moveWall,remapDoors,cornerExclusion,setCornerExclusion,svgStraightPath,jsonBoundaryCandidates};
 });

@@ -732,9 +732,9 @@
     $('#applyExclusion').onclick=()=>editExclusion({width:Number($('#exclusionWidth').value),height:Number($('#exclusionHeight').value)});
     $('#resetExclusion').onclick=()=>editExclusion({enabled:true,width:50,height:40});
   }
-  let svgCandidates=[];
+  let svgCandidates=[],boundaryImportType='SVG';
   function svgImportPoints(){
-    const item=svgCandidates[Number($('#svgOutline').value)];if(!item)throw Error('Choose an SVG outline first.');
+    const item=svgCandidates[Number($('#svgOutline').value)];if(!item)throw Error('Choose an SVG or JSON outline first.');
     const width=Number($('#svgWidth').value),x=Number($('#svgX').value),y=Number($('#svgY').value);
     if(!Number.isFinite(width)||width<=0||width>10000||![x,y].every(v=>Number.isFinite(v)&&Math.abs(v)<1e5))throw Error('Enter a positive width up to 10,000 ft and valid X/Y coordinates.');
     const minX=Math.min(...item.points.map(p=>p.x)),minY=Math.min(...item.points.map(p=>p.y)),span=Math.max(...item.points.map(p=>p.x))-minX;
@@ -751,13 +751,16 @@
   $('#svgFile').onchange=async event=>{
     const file=event.target.files?.[0];if(!file)return;svgCandidates=[];$('#svgApply').disabled=true;
     try{
-      if(file.size>2e6)throw Error('Choose an SVG smaller than 2 MB.');
-      const source=await file.text();if(/<!DOCTYPE|<!ENTITY/i.test(source))throw Error('SVG document declarations/entities are not supported.');
-      const doc=new DOMParser().parseFromString(source,'image/svg+xml');if(doc.querySelector('parsererror')||doc.documentElement.localName!=='svg')throw Error('Invalid SVG file.');
+      if(file.size>3e6)throw Error('Choose an SVG or JSON smaller than 3 MB.');
+      const source=(await file.text()).replace(/^\uFEFF/,'');boundaryImportType=/\.json$/i.test(file.name)||/^\s*[\[{]/.test(source)?'JSON':'SVG';
       let skipped=0;
+      if(boundaryImportType==='JSON')svgCandidates=E.jsonBoundaryCandidates(JSON.parse(source));
+      else{
+      if(/<!DOCTYPE|<!ENTITY/i.test(source))throw Error('SVG document declarations/entities are not supported.');
+      const doc=new DOMParser().parseFromString(source,'image/svg+xml');if(doc.querySelector('parsererror')||doc.documentElement.localName!=='svg')throw Error('Invalid SVG file.');
       for(const node of doc.querySelectorAll('polygon,rect,path')){
         try{
-          for(let n=node;n&&n!==doc;n=n.parentNode){if(n.nodeType===1&&(n.hasAttribute('transform')||n.hasAttribute('clip-path')||n.hasAttribute('mask')||n.hasAttribute('style')||['defs','symbol','clipPath','mask'].includes(n.localName)||n!==doc.documentElement&&n.localName==='svg'))throw Error('Flatten transforms and remove styling/clipping first.');}
+          for(let n=node;n&&n!==doc;n=n.parentNode){if(n.nodeType===1&&(n.hasAttribute('transform')||n.hasAttribute('clip-path')||n.hasAttribute('mask')||/(?:transform|clip-path|mask|\bd)\s*:/i.test(n.getAttribute('style')||'')||['defs','symbol','clipPath','mask'].includes(n.localName)||n!==doc.documentElement&&n.localName==='svg'))throw Error('Flatten transforms and remove clipping first.');}
           let data=node.getAttribute('d');
           if(node.localName==='polygon')data='M '+node.getAttribute('points')+' Z';
           if(node.localName==='rect'){if(node.hasAttribute('rx')||node.hasAttribute('ry'))throw Error('Rounded rectangles are unsupported.');const x=Number(node.getAttribute('x')||0),y=Number(node.getAttribute('y')||0),w=Number(node.getAttribute('width')),h=Number(node.getAttribute('height'));if(![x,y,w,h].every(Number.isFinite)||w<=0||h<=0)throw Error('Invalid rectangle.');data=`M ${x} ${y} h ${w} v ${h} h ${-w} Z`;}
@@ -766,21 +769,23 @@
         if(svgCandidates.length>=100)break;
       }
       if(!svgCandidates.length)throw Error('No supported outline found. Export a closed polygon or straight M/L/H/V/Z path; flatten transforms, styles and clipping. Curves and compound paths are not supported.');
+      }
       $('#svgOutline').innerHTML=svgCandidates.map((c,i)=>'<option value="'+i+'">'+esc(c.name)+'</option>').join('');$('#svgOutline').value='0';
-      const site=model.boundaries.find(b=>!b.groupId),p=site?.points||svgCandidates[0].points;
-      $('#svgWidth').value=fmt(Math.max(...p.map(v=>v.x))-Math.min(...p.map(v=>v.x))).replaceAll(',','');$('#svgX').value=Math.min(...p.map(v=>v.x));$('#svgY').value=Math.min(...p.map(v=>v.y));
+      const site=model.boundaries.find(b=>!b.groupId),p=boundaryImportType==='JSON'?svgCandidates[0].points:site?.points||svgCandidates[0].points;
+      $('#svgWidth').value=Math.max(...p.map(v=>v.x))-Math.min(...p.map(v=>v.x));$('#svgX').value=Math.min(...p.map(v=>v.x));$('#svgY').value=Math.min(...p.map(v=>v.y));
       $('#svgNotice').textContent=file.name+' · '+svgCandidates.length+' outlines available'+(skipped?' · '+skipped+' unsupported shapes skipped.':'');previewSvgBoundary();
     }catch(e){$('#svgNotice').textContent=e.message;$('#svgOutline').innerHTML='';$('#svgPreview').textContent='';}
     event.target.value='';
   };
   for(const id of ['svgOutline','svgWidth','svgX','svgY']){$('#'+id).onchange=previewSvgBoundary;$('#'+id).oninput=previewSvgBoundary;}
+  $('#svgOutline').onchange=()=>{if(boundaryImportType==='JSON'){const p=svgCandidates[Number($('#svgOutline').value)].points;$('#svgWidth').value=Math.max(...p.map(v=>v.x))-Math.min(...p.map(v=>v.x));$('#svgX').value=Math.min(...p.map(v=>v.x));$('#svgY').value=Math.min(...p.map(v=>v.y));}previewSvgBoundary();};
   $('#svgApply').onclick=()=>{try{
     const points=svgImportPoints(),only=$('#svgMode').value==='study';checkpoint();
     if(only){model=defaultModel();selected.clear();selectedWall=selectedDoor=activeGroup=activeCorridor=null;}
-    const old=model.boundaries.find(b=>!b.groupId);model.boundaries=model.boundaries.filter(b=>b.groupId).concat({id:old?.id||model.nextId++,name:'Imported SVG boundary',groupId:null,points});
+    const old=model.boundaries.find(b=>!b.groupId);model.boundaries=model.boundaries.filter(b=>b.groupId).concat({id:old?.id||model.nextId++,name:'Imported '+boundaryImportType+' boundary',groupId:null,points});
     model.settings.boundaryReview=!groupValid(model.rooms,model.boundaries,model.corridors);delete model.boundaryLabels;
-    model.reference={title:only?'SVG boundary-only study':'Layout with SVG boundary',note:'Imported boundary scaled in feet. Room positions and geometry are unchanged. Any crossing spaces are marked red for review; import does not automatically refit rooms.'};
-    drawing=drag=preview=wallPreview=doorPlacement=null;render();fit();status('SVG boundary applied. Undo restores the previous plan; Save keeps this version.');
+    model.reference={title:only?boundaryImportType+' boundary-only study':'Layout with '+boundaryImportType+' boundary',note:'Imported boundary scaled in feet. Room positions and geometry are unchanged. Any crossing spaces are marked red for review; import does not automatically refit rooms.'};
+    drawing=drag=preview=wallPreview=doorPlacement=null;render();fit();status(boundaryImportType+' boundary applied. Undo restores the previous plan; Save keeps this version.');
   }catch(e){status(e.message);}};
   function editExclusion(patch){
     const site=model.boundaries.find(b=>!b.groupId);if(!site)return;
