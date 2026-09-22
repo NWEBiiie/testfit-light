@@ -15,7 +15,7 @@
     const f=frame(door,entities);if(!f||door.width<.5||door.width>f.length-.1)return null;
     const offset=Math.max(door.width/2+.05,Math.min(f.length-door.width/2-.05,door.position*f.length));
     const center=add(f.edge.a,mul(f.u,offset)),a=add(center,mul(f.u,-door.width/2)),b=add(center,mul(f.u,door.width/2));
-    return {...f,a,b,center,offset,width:door.width,hinge:door.hinge==='end'?b:a,tip:door.hinge==='end'?a:b,id:door.id,swing:door.swing};
+    return {...f,a,b,center,offset,width:door.width,leaves:door.leaves===2?2:1,hinge:door.hinge==='end'?b:a,tip:door.hinge==='end'?a:b,id:door.id,swing:door.swing};
   }
   function subtract(ranges,lo,hi){
     return ranges.flatMap(([a,b])=>hi<=a||lo>=b?[[a,b]]:[[a,Math.max(a,lo)],[Math.min(b,hi),b]].filter(([x,y])=>y-x>1e-6));

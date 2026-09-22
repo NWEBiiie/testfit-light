@@ -25,9 +25,9 @@
   function checkpoint(){undo.push(copy(model));if(undo.length>60)undo.shift();redo=[];}
   function newRoom(name,width,depth,shape='rect',angle=0){return {id:model.nextId++,name,width,depth,shape,angle,x:0,y:0,color:palette[model.rooms.length%palette.length],groupId:null,locked:false,walls:Array.from({length:shape==='l'?6:4},()=>({kind:'wall',thickness:model.settings.thickness,revision:0,segments:[]}))};}
   function sample(variant){
-    variant=variant||window.location?.search?.match(/[?&]layout=(saved|west|east|split)(?:&|$)/)?.[1]||'saved';
-    model=H.migrate(window.createLightPhotoProject(G,variant));
-    activeCorridor=null;selected=new Set([model.rooms[0].id]);selectedWall=selectedDoor=null;activeGroup=null;isolatedRoom=wallExtension=selectedCorridorSide=null;doorPlacement=drawing=stoppedDrawing=drag=preview=wallPreview=null;
+    variant=variant||window.location?.search?.match(/[?&]layout=(saved|boundary)(?:&|$)/)?.[1]||'saved';
+    model=H.migrate(variant==='boundary'?copy(window.LightBoundaryStudy):window.createLightPhotoProject(G,variant));
+    activeCorridor=null;selected=new Set(model.rooms.length?[model.rooms[0].id]:[]);selectedWall=selectedDoor=null;activeGroup=null;isolatedRoom=wallExtension=selectedCorridorSide=null;doorPlacement=drawing=stoppedDrawing=drag=preview=wallPreview=null;
     render();fit();status(model.reference.title+' · Save each option before editing.');
   }
   function screen(point){return {x:(point.x-view.x)*view.zoom+size.width/2,y:(point.y-view.y)*view.zoom+size.height/2};}
@@ -36,7 +36,8 @@
   function line(a,b,attrs=''){const p=screen(a),q=screen(b);return `<line x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" ${attrs}/>`;}
   function fit(){const points=[...obstacles().flatMap(G.polygon),...model.boundaries.flatMap(b=>b.points)];if(!points.length){view={x:25,y:20,zoom:10};draw();return;}
     const xs=points.map(p=>p.x),ys=points.map(p=>p.y),x=Math.min(...xs),y=Math.min(...ys),w=Math.max(...xs)-x,h=Math.max(...ys)-y;
-    view={x:x+w/2,y:y+h/2,zoom:Math.max(.5,Math.min(25,(size.width-70)/(w+4),(size.height-100)/(h+4)))};draw();}
+    const boundaryOnly=model.reference?.variant==='boundary';
+    view={x:x+w/2,y:y+h/2,zoom:Math.max(.5,Math.min(25,(size.width-(boundaryOnly?230:70))/(w+4),(size.height-(boundaryOnly?180:100))/(h+4)))};draw();}
   function drawWallMass(network){
     const entities=wallPreview?.rooms||preview||model.rooms;
     const minThickness=1.2/view.zoom,key=JSON.stringify([network,minThickness,doorViews,entities]);
@@ -173,8 +174,11 @@
     render();status(selected.size+' room(s) selected. Drag the selection to move it, or group it.');
   }
   function drawDoor(door){
-    const hinge=screen(door.hinge),closed=screen(door.tip),tip=screen(G.add(door.hinge,G.rotate(G.sub(door.tip,door.hinge),door.swing*90))),radius=door.width*view.zoom;
-    const d=`M${hinge.x} ${hinge.y} L${tip.x} ${tip.y} M${closed.x} ${closed.y} A${radius} ${radius} 0 0 ${door.swing>0?1:0} ${tip.x} ${tip.y}`;
+    const leaves=door.leaves===2?[{hinge:door.a,tip:door.center,swing:door.swing},{hinge:door.b,tip:door.center,swing:-door.swing}]:[door];
+    const d=leaves.map(leaf=>{
+      const hinge=screen(leaf.hinge),closed=screen(leaf.tip),tip=screen(G.add(leaf.hinge,G.rotate(G.sub(leaf.tip,leaf.hinge),leaf.swing*90))),radius=G.distance(leaf.hinge,leaf.tip)*view.zoom;
+      return `M${hinge.x} ${hinge.y} L${tip.x} ${tip.y} M${closed.x} ${closed.y} A${radius} ${radius} 0 0 ${leaf.swing>0?1:0} ${tip.x} ${tip.y}`;
+    }).join(' ');
     const picked=door.id===selectedDoor,color=picked?'#235bb7':'#59728c';
     let svg=`<g class="door-symbol" ${drawing?'pointer-events="none"':`data-door="${door.id}"`}><path d="${d}" fill="none" stroke="${color}" stroke-width="${picked?2.5:1.4}" pointer-events="none"/>`;
     if(!drawing)svg+=`<path class="door-hit" d="${d}" fill="none" stroke="transparent" stroke-width="16" pointer-events="stroke"><title>Door · ${fmt(door.width)} ft · Click to edit; drag along its wall</title></path>`+line(door.a,door.b,'class="door-hit" stroke="transparent" stroke-width="16" pointer-events="stroke"');
@@ -190,6 +194,21 @@
     const unit=5*view.zoom,origin=screen({x:0,y:0});
     let svg=`<defs><pattern id="grid" width="${unit}" height="${unit}" patternUnits="userSpaceOnUse" x="${origin.x%unit}" y="${origin.y%unit}"><path d="M${unit} 0 H0 V${unit}" fill="none" stroke="#dce4ed" stroke-width=".7"/></pattern></defs><rect width="100%" height="100%" fill="#f8fafc"/><rect width="100%" height="100%" fill="url(#grid)"/>`;
     model.boundaries.forEach(b=>{const color=b.groupId?(getGroup(b.groupId)?.color||'#3675c8'):'#768699';svg+=`<path d="${path(b.points)}" fill="${b.groupId?'none':'#ffffff88'}" stroke="${color}" stroke-width="${b.groupId?1.5:2}" ${b.groupId?'stroke-dasharray="8 5"':''}/>`;});
+    if(model.reference?.variant==='boundary'){
+      const p=model.boundaries[0].points;
+      p.forEach((a,i)=>{
+        const b=p[(i+1)%p.length],dx=b.x-a.x,dy=b.y-a.y,len=Math.hypot(dx,dy),mid=screen({x:(a.x+b.x)/2,y:(a.y+b.y)/2});
+        const short=len<6,offset=(i===5||i===7)?-17:17;
+        const leaders={0:[0,22],2:[-20,-32],3:[0,-65],4:[25,-22],9:[-30,-40],13:[55,12],14:[20,-40],19:[25,35],20:[15,25],21:[-20,42],22:[-65,25],23:[-30,70],25:[-30,-35],26:[-65,0]};
+        const shift=leaders[i];
+        const x=mid.x+(shift?shift[0]:dy/len*offset),y=mid.y+(shift?shift[1]:-dx/len*offset);
+        let angle=Math.atan2(dy,dx)*180/Math.PI;if(angle>90)angle-=180;if(angle< -90)angle+=180;
+        const label=model.boundaryLabels?.[i]||('≈ '+fmt(len)+' ft');
+        const compact='E'+(i+1)+' · '+label.split(' · ')[0].replace(' photo','');
+        svg+='<g class="boundary-dimension" pointer-events="none"><title>'+esc(label)+'; drawn '+fmt(len)+' ft</title><line x1="'+mid.x+'" y1="'+mid.y+'" x2="'+x+'" y2="'+y+'" stroke="#43749d" stroke-width=".7"/><text x="'+x+'" y="'+y+'" text-anchor="middle" dominant-baseline="middle" transform="rotate('+(short?0:angle)+' '+x+' '+y+')" font-size="11" fill="#235bb7" stroke="white" stroke-width="3" paint-order="stroke">'+esc(compact)+'</text></g>';
+      });
+      const corner=screen(p[12]);svg+='<text x="'+(corner.x+20)+'" y="'+(corner.y-35)+'" font-size="13" fill="#235bb7">97°</text>';
+    }
     const corridorRegion=G.unionOutline(G.corridorCuts(corridors,model.boundaries));
     if(corridorRegion.length)svg+=`<path data-corridor="region" d="${corridorRegion.map(path).join(' ')}" fill-rule="evenodd" fill="#edf5f8" stroke="#9abcc8" stroke-width=".8"><title>Continuous corridor void · no walls</title></path>`;
     corridors.forEach(c=>{const p=G.polygon(c);svg+=`<path data-corridor="${c.id}" d="${path(p)}" fill="transparent" stroke="${activeCorridor===c.id?'#2d82a0':'none'}" stroke-width="1.5" stroke-dasharray="6 4"><title>${esc(c.name)} · wall-free corridor</title></path>`;});
@@ -222,6 +241,12 @@
     const dimensionRoom=one()&&rooms.find(r=>r.id===one().id);if(dimensionRoom&&!drawing&&!doorPlacement)svg+=drawDimensions(dimensionRoom);
     const activePath=corridors.find(c=>c.id===activeCorridor);if(activePath&&!drawing&&!doorPlacement)svg+=drawCorridorEdges(activePath);
     doorViews.forEach(d=>svg+=drawDoor(d));
+    if(model.settings.boundaryReview===true){
+      const site=model.boundaries.find(b=>!b.groupId);
+      if(site){svg+='<path d="'+path(site.points)+'" fill="none" stroke="#235bb7" stroke-width="2" pointer-events="none"/>';
+        rooms.concat(corridors).filter(r=>!G.contains(G.polygon(r),site.points)).forEach(r=>{svg+='<path class="boundary-conflict" d="'+path(G.polygon(r))+'" fill="none" stroke="#cf433e" stroke-width="2" stroke-dasharray="6 4" pointer-events="none"><title>'+esc(r.name)+' crosses revised boundary — retained for refit</title></path>';});
+      }
+    }
     if(drag?.kind==='rooms'&&drag.moved&&preview){
       const moving=rooms.filter(r=>selected.has(r.id)),others=rooms.filter(r=>!selected.has(r.id)).concat(model.corridors);
       G.contactEdges(moving,others,model.boundaries).forEach(e=>svg+=line(e.a,e.b,'stroke="#1984b5" stroke-width="3" stroke-dasharray="5 3" pointer-events="none"'));
@@ -244,6 +269,7 @@
     $('#makeGroup').disabled=selected.size<2;
     $('#groupList').innerHTML=model.groups.map(g=>`<button class="group-button ${activeGroup===g.id?'active':''}" data-group="${g.id}">${esc(g.name)}<small>${groupRooms(g.id).length} rooms</small></button>`).join('')||'<p class="hint">Select two or more rooms to make a group.</p>';
     $('#corridorList').innerHTML=model.corridors.map(c=>`<div class="corridor-row"><button class="side-button ${activeCorridor===c.id?'active':''}" data-corridor="${c.id}"><span>${esc(c.name)}</span><small>${c.outline?'Custom outline':fmt(c.width)+' ft wide'}</small></button><button class="danger corridor-delete" type="button" data-delete-corridor="${c.id}" aria-label="Delete ${esc(c.name)}" title="Delete corridor · Undo restores it">Delete</button></div>`).join('')||'<p class="hint">Click once per corner, then Stop drawing. The corridor forms a barrier and cuts back overlapping rooms.</p>';
+    renderExclusionControls();
     $('#boundaryCount').textContent=model.boundaries.length;
     $('#boundaryList').innerHTML=model.boundaries.map(b=>`<div class="boundary-item"><div><strong>${esc(b.name)}</strong><small>${fmt(G.area(b.points))} sf · ${b.groupId?'group':'site'}</small></div><button data-remove-boundary="${b.id}" aria-label="Remove ${esc(b.name)}">×</button></div>`).join('')||'<p class="hint">Draw a site boundary above the plan.</p>';
   }
@@ -488,7 +514,9 @@
     const door=model.doors.find(d=>d.id===selectedDoor),f=H.frame(door,obstacles());if(!f)return;
     const o=H.opening(door,obstacles()),shown=doorViews.some(d=>d.id===door.id);
     $('#inspectorTitle').textContent='Door properties';
-    $('#inspector').innerHTML=`<div class="notice">Hosted on ${esc(f.host.name)} · Side ${door.side+1}<br>This is an independent door, not a separate wall piece.</div>${shown?'':'<div class="notice warning">The opening does not currently fit on a clear solid span. The door is retained: restore the wall, reduce the door width, or choose another position.</div>'}${input('doorWidth','Door width · ft',door.width,'type="number" min="0.5" max="12" step="0.25"')}${input('doorPosition','Door center from endpoint A · ft',Number((o?.offset??door.position*f.length).toFixed(3)),`type="number" min="0" max="${f.length}" step="0.25"`)}<p class="hint">Host length: ${fmt(f.length)} ft. Drag the door symbol to slide it along this wall. The insert follows its host when the room or wall moves.</p><div class="two door-actions"><button id="flipHinge">Flip hinge</button><button id="flipSwing">Flip swing</button></div><button id="backToHost" class="wide">Select host wall</button><button id="deleteDoor" class="wide danger door-actions">Delete door</button>`;
+    $('#inspector').innerHTML=`<div class="notice">Hosted on ${esc(f.host.name)} · Side ${door.side+1}<br>This is an independent door, not a separate wall piece.</div>${shown?'':'<div class="notice warning">The opening does not currently fit on a clear solid span. The door is retained: restore the wall, reduce the door width, or choose another position.</div>'}<label>Door type<select id="doorLeaves"><option value="1" ${door.leaves!==2?'selected':''}>Single leaf</option><option value="2" ${door.leaves===2?'selected':''}>Double door · equal leaves</option></select></label>${input('doorWidth','Total opening width · ft',door.width,'type="number" min="0.5" max="12" step="0.25"')}${input('doorPosition','Door center from endpoint A · ft',Number((o?.offset??door.position*f.length).toFixed(3)),`type="number" min="0" max="${f.length}" step="0.25"`)}<p class="hint">Host length: ${fmt(f.length)} ft. Drag the door symbol to slide it along this wall. The insert follows its host when the room or wall moves.</p><div class="two door-actions"><button id="flipHinge">Flip hinge</button><button id="flipSwing">Flip swing</button></div><button id="backToHost" class="wide">Select host wall</button><button id="deleteDoor" class="wide danger door-actions">Delete door</button>`;
+    $('#doorLeaves').onchange=e=>editDoor({leaves:Number(e.target.value)});
+    $('#flipHinge').disabled=door.leaves===2;
     $('#doorWidth').onchange=e=>editDoor({width:Number(e.target.value)});
     $('#doorPosition').onchange=e=>editDoor({position:Number(e.target.value)/f.length});
     $('#flipHinge').onclick=()=>editDoor({hinge:door.hinge==='end'?'start':'end'});
@@ -694,6 +722,24 @@
   function history(direction){const from=direction==='undo'?undo:redo,to=direction==='undo'?redo:undo;if(!from.length)return;completedRoomClick=null;to.push(copy(model));model=from.pop();selected=new Set([...selected].filter(id=>getRoom(id)));activeCorridor=selectedWall=selectedDoor=activeGroup=null;isolatedRoom=wallExtension=selectedCorridorSide=null;doorPlacement=drawing=stoppedDrawing=drag=preview=wallPreview=null;syncSettings();render();status(direction==='undo'?'Undone.':'Redone.');}
   $('#undo').onclick=()=>history('undo');$('#redo').onclick=()=>history('redo');
   document.addEventListener('keydown',event=>{if(event.key==='Escape'&&doorPlacement){event.preventDefault();doorPlacement=null;render();return;}if(handleDrawingKey(event))return;if(/INPUT|SELECT|TEXTAREA/.test(event.target.tagName))return;if(event.key==='Delete'&&!drawing&&selectedDoor&&!event.repeat&&!event.ctrlKey&&!event.metaKey&&!event.altKey){event.preventDefault();deleteDoor();return;}if(event.key==='Delete'&&!drawing&&activeCorridor&&!event.repeat&&!event.ctrlKey&&!event.metaKey&&!event.altKey){event.preventDefault();removeCorridor(activeCorridor);return;}if(event.key==='Escape'){if(drag?.frame)cancelAnimationFrame(drag.frame);drawing=drag=preview=wallPreview=null;if(wallExtension)wallExtension=null;else isolatedRoom=null;render();}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();history(event.shiftKey?'redo':'undo');}},true);
+  function renderExclusionControls(){
+    const site=model.boundaries.find(b=>!b.groupId),panel=$('#exclusionControls');if(!panel)return;
+    if(model.reference?.variant==='boundary'){panel.innerHTML='<h3>Boundary dimensions · feet</h3><p class="hint">Edge numbers match the plan. Photo labels are not a claim that the entire outline closes exactly. ≈ means unresolved.</p>'+model.boundaries[0].points.map((a,i)=>{const b=model.boundaries[0].points[(i+1)%model.boundaries[0].points.length];return '<p class="hint"><strong>E'+(i+1)+': '+esc(model.boundaryLabels?.[i]||'Verify')+'</strong><br>Drawn length: '+fmt(G.distance(a,b))+' ft</p>';}).join('');return;}
+    if(!site){panel.innerHTML='<p class="hint">Draw a site boundary to add the lower-right exclusion.</p>';return;}
+    const e=E.cornerExclusion(site);
+    panel.innerHTML=`<label class="check"><input id="exclusionEnabled" type="checkbox" ${e.enabled?'checked':''}> Exclude lower-right corner</label><div class="two">${input('exclusionWidth','Width · ft',Number(e.width.toFixed(3)),'type="number" min="0.25" max="500" step="0.25"')}${input('exclusionHeight','Height · ft',Number(e.height.toFixed(3)),'type="number" min="0.25" max="500" step="0.25"')}</div><button id="applyExclusion" class="wide">Apply exclusion size</button><button id="resetExclusion" class="text-button">Use default 50 × 40 ft</button><p class="hint">Anchored at the lower-right outer corner. Off restores the full shell. Conflicting changes are blocked; rooms are never deleted or moved.</p>`;
+    $('#exclusionEnabled').onchange=ev=>editExclusion({enabled:ev.target.checked});
+    $('#applyExclusion').onclick=()=>editExclusion({width:Number($('#exclusionWidth').value),height:Number($('#exclusionHeight').value)});
+    $('#resetExclusion').onclick=()=>editExclusion({enabled:true,width:50,height:40});
+  }
+  function editExclusion(patch){
+    const site=model.boundaries.find(b=>!b.groupId);if(!site)return;
+    const next=E.setCornerExclusion(site,patch);
+    if(!next){renderExclusionControls();status('Use positive dimensions that fit the lower-right rectangular corner.');return;}
+    const boundaries=model.boundaries.map(b=>b.id===site.id?next:b);
+    if(!groupValid(model.rooms,boundaries,model.corridors)){renderExclusionControls();status('That exclusion intersects a room or corridor. Move those spaces first; nothing was changed.');return;}
+    checkpoint();model.boundaries=boundaries;render();status(next.exclusion.enabled?'Lower-right exclusion: '+fmt(next.exclusion.width)+' × '+fmt(next.exclusion.height)+' ft.':'Exclusion off. The full lower-right area is available.');
+  }
   function syncSettings(){$('#wallStyle').value=model.settings.wallStyle;$('#defaultThickness').value=model.settings.thickness;$('#boundarySnap').checked=model.settings.boundarySnap;$('#roomSnap').checked=model.settings.roomSnap;$('#snapDistance').value=model.settings.margin;}
   [['#defaultThickness','thickness'],['#boundarySnap','boundarySnap'],['#roomSnap','roomSnap'],['#snapDistance','margin']].forEach(([id,key])=>$(id).onchange=e=>{const value=e.target.type==='checkbox'?e.target.checked:Number(e.target.value);if(typeof value==='number'&&(!Number.isFinite(value)||value<0||(key==='thickness'&&(value<1||value>36)))){syncSettings();return;}checkpoint();model.settings[key]=value;render();});
   $('#wallStyle').onchange=e=>{checkpoint();model.settings.wallStyle=e.target.value;draw();};
@@ -706,29 +752,31 @@
     const next=defaultModel(),ids=new Set();next.settings={...next.settings,...value.settings};next.settings.thickness=Math.max(1,Math.min(36,Number(next.settings.thickness)||6));next.settings.margin=Math.max(.1,Math.min(10,Number(next.settings.margin)||2));delete next.settings.grid;next.settings.wallStyle=['black','poche','hatch'].includes(next.settings.wallStyle)?next.settings.wallStyle:'poche';
     if(value.reference&&typeof value.reference==='object'){
       next.reference={title:String(value.reference.title||'Photo-based study').slice(0,96),note:String(value.reference.note||'Approximate reference plan.').slice(0,700)};
-      if(['saved','west','east','split'].includes(value.reference.variant))next.reference.variant=value.reference.variant;
+      if(['saved','boundary','west','east','split','client1','client2','client3','client4','client5'].includes(value.reference.variant))next.reference.variant=value.reference.variant;
       if(value.reference.dimensions)next.reference.dimensions=Object.fromEntries(['overallWidth','leftDepth','topLength','rightReturn'].filter(key=>Number.isFinite(value.reference.dimensions[key])).map(key=>[key,value.reference.dimensions[key]]));
       const exclusion=value.reference.excludedCorner;
       if(exclusion&&['x','y','width','height','area'].every(key=>Number.isFinite(exclusion[key])))next.reference.excludedCorner=Object.fromEntries(['x','y','width','height','area'].map(key=>[key,exclusion[key]]));
     }
+    if(Array.isArray(value.boundaryLabels))next.boundaryLabels=value.boundaryLabels.slice(0,100).map(s=>String(s).slice(0,120));
     const cleanId=id=>{if(!Number.isSafeInteger(id)||id<1||id>1e9||ids.has(id))throw Error('Invalid or duplicated project IDs.');ids.add(id);return id;};
     next.groups=value.groups.map(g=>({id:cleanId(g.id),name:String(g.name||'Group').slice(0,48),alignment:g.alignment==='bottom'?'bottom':null,color:/^#[0-9a-f]{6}$/i.test(g.color)?g.color:'#3675c8'}));
     next.rooms=value.rooms.map(r=>{if(!validDimensions(r)||!['rect','l','custom'].includes(r.shape)||!G.validBoundaryFit(r))throw Error('Invalid room geometry or boundary fit.');const id=cleanId(r.id);return {...r,id,type:'room',shortLabel:String(r.shortLabel||'').slice(0,48),name:String(r.name||'Room').slice(0,48),angle:G.normalize(r.angle),boundaryFit:r.boundaryFit?{side:r.boundaryFit.side,...(r.boundaryFit.manual===true?{manual:true}:{}),...(r.boundaryFit.sides?{sides:[...r.boundaryFit.sides]}:{}),points:r.boundaryFit.points.map(p=>({x:p.x,y:p.y}))}:null,color:/^#[0-9a-f]{6}$/i.test(r.color)?r.color:palette[0],locked:!!r.locked,groupId:next.groups.some(g=>g.id===r.groupId)?r.groupId:null,walls:Array.from({length:r.shape==='custom'?r.boundaryFit.points.length:r.shape==='l'?6:4},(_,i)=>sanitizeWall(r.walls?.[i],next.settings.thickness))};});
-    next.boundaries=value.boundaries.map(b=>{const id=cleanId(b.id);if(!Array.isArray(b.points)||b.points.length>100||!b.points.every(p=>Number.isFinite(p.x)&&Number.isFinite(p.y))||!G.simple(b.points))throw Error('Invalid boundary polygon.');if(b.groupId&&!next.groups.some(g=>g.id===b.groupId))throw Error('Unknown boundary group.');return {id,name:String(b.name||'Boundary').slice(0,64),groupId:b.groupId||null,points:b.points.map(p=>({x:p.x,y:p.y}))};});
+    next.boundaries=value.boundaries.map(b=>{const id=cleanId(b.id);if(!Array.isArray(b.points)||b.points.length>100||!b.points.every(p=>Number.isFinite(p.x)&&Number.isFinite(p.y))||!G.simple(b.points))throw Error('Invalid boundary polygon.');if(b.groupId&&!next.groups.some(g=>g.id===b.groupId))throw Error('Unknown boundary group.');const clean={id,name:String(b.name||'Boundary').slice(0,64),groupId:b.groupId||null,points:b.points.map(p=>({x:p.x,y:p.y}))};if(b.exclusion){const e=b.exclusion;if(b.groupId||typeof e.enabled!=='boolean'||!Array.isArray(e.basePoints)||e.basePoints.length>100||!e.basePoints.every(p=>Number.isFinite(p?.x)&&Number.isFinite(p?.y)))throw Error('Invalid corner exclusion.');const rebuilt=E.setCornerExclusion({...clean,exclusion:e},{});if(!rebuilt||rebuilt.points.length!==clean.points.length||rebuilt.points.some((p,i)=>G.distance(p,clean.points[i])>1e-5))throw Error('Exclusion does not match the boundary.');clean.exclusion=rebuilt.exclusion;}return clean;});
     if(value.corridors!==undefined&&(!Array.isArray(value.corridors)||value.corridors.length>100))throw Error('Use at most 100 corridor paths.');
     next.corridors=(value.corridors||[]).map(c=>{
       const id=cleanId(c.id),points=Array.isArray(c.points)?c.points.map(p=>({x:p?.x,y:p?.y})):[],poly=G.corridorPolygon(points,c.width);
       if(!G.simple(poly))throw Error('Invalid corridor path or width.');
-      if(c.outline&&(!Array.isArray(c.outline)||c.outline.length!==poly.length||!c.outline.every(p=>Number.isFinite(p?.x)&&Number.isFinite(p?.y)&&Math.abs(p.x)<1e6&&Math.abs(p.y)<1e6)||!G.simple(c.outline)))throw Error('Invalid edited corridor outline.');
-      return {id,type:'corridor',name:String(c.name||'Corridor').slice(0,48),width:c.width,...(c.outline?{outline:c.outline.map(p=>({x:p.x,y:p.y}))}:{}),drawMode:c.drawMode==='free'?'free':points.slice(1).every((p,i)=>Math.abs(p.x-points[i].x)<G.EPS||Math.abs(p.y-points[i].y)<G.EPS)?'ortho':'free',points,walls:poly.map((_,i)=>sanitizeWall(c.walls?.[i]||{kind:i===points.length-1||i===poly.length-1?'opening':'wall'},next.settings.thickness))};
+      if(c.outline&&(!Array.isArray(c.outline)||c.outline.length>100||!c.outline.every(p=>Number.isFinite(p?.x)&&Number.isFinite(p?.y)&&Math.abs(p.x)<1e6&&Math.abs(p.y)<1e6)||!G.simple(c.outline)))throw Error('Invalid edited corridor outline.');
+      return {id,type:'corridor',name:String(c.name||'Corridor').slice(0,48),width:c.width,...(c.outline?{outline:c.outline.map(p=>({x:p.x,y:p.y}))}:{}),drawMode:c.drawMode==='free'?'free':points.slice(1).every((p,i)=>Math.abs(p.x-points[i].x)<G.EPS||Math.abs(p.y-points[i].y)<G.EPS)?'ortho':'free',points,walls:(c.outline||poly).map((_,i)=>sanitizeWall(c.walls?.[i]||{kind:i===points.length-1||i===poly.length-1?'opening':'wall'},next.settings.thickness))};
     });
     if(new Set(next.boundaries.map(b=>b.groupId)).size!==next.boundaries.length)throw Error('Only one boundary per group and one site boundary are supported.');
-    if(!groupValid(next.rooms,next.boundaries,next.corridors))throw Error('The project contains overlapping rooms, rooms crossing corridors, or spaces outside their boundaries.');
+    const validationBoundaries=next.settings.boundaryReview===true?next.boundaries.filter(b=>b.groupId):next.boundaries;
+    if(!groupValid(next.rooms,validationBoundaries,next.corridors))throw Error('The project contains overlapping rooms, rooms crossing corridors, or spaces outside their boundaries.');
     if(value.doors!==undefined&&(!Array.isArray(value.doors)||value.doors.length>1500))throw Error('Use at most 1,500 hosted doors.');
     next.doors=(value.doors||[]).map(d=>{
       const id=cleanId(d.id),host=next.rooms.concat(next.corridors).find(e=>e.id===d.hostId);
       if(!host||!Number.isInteger(d.side)||!G.edges(G.polygon(host))[d.side]||!Number.isFinite(d.width)||d.width<.5||d.width>12||!Number.isFinite(d.position)||d.position<0||d.position>1)throw Error('Invalid hosted door or missing host wall.');
-      return {id,hostId:host.id,side:d.side,width:d.width,position:d.position,hinge:d.hinge==='end'?'end':'start',swing:d.swing===-1?-1:1};
+      return {id,hostId:host.id,side:d.side,width:d.width,position:d.position,...(d.leaves===2?{leaves:2}:{}),hinge:d.hinge==='end'?'end':'start',swing:d.swing===-1?-1:1};
     });
     next.nextId=Math.max(0,...ids)+1;next.revision=Math.max(1,...next.rooms.concat(next.corridors).flatMap(r=>r.walls.flatMap(w=>[w.revision,...w.segments.map(s=>s.revision)])))+1;return H.migrate(next);
   }

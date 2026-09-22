@@ -225,5 +225,34 @@
       return edge?{...d,side:edge.side,position:Math.max(0,Math.min(1,(edge.newFrom??0)+at*((edge.newTo??1)-(edge.newFrom??0))))}:d;
     });
   }
-  return {selectRooms,extendWall,moveWall,remapDoors};
+  // Rectangular southeast exclusion is an editable part of the site polygon.
+  // Keep the complete outer shell so disabling it is lossless.
+  function cornerExclusion(boundary){
+    if(boundary.exclusion)return JSON.parse(JSON.stringify(boundary.exclusion));
+    let p=boundary.points.map(v=>({...v}));
+    if(p.reduce((s,a,i)=>s+cross(a,p[(i+1)%p.length]),0)<0)p.reverse();
+    const maxX=Math.max(...p.map(v=>v.x));
+    for(let i=0;i<p.length;i++){
+      const a=p[(i+p.length-1)%p.length],c=p[i],d=p[(i+1)%p.length];
+      if(Math.abs(a.x-maxX)<1e-5&&Math.abs(a.y-c.y)<1e-5&&a.x>c.x&&Math.abs(c.x-d.x)<1e-5&&d.y>c.y){
+        const corner={x:a.x,y:d.y},basePoints=[];
+        for(let j=0;j<p.length;j++){if(j===(i+p.length-1)%p.length)basePoints.push(corner);else if(j!==i&&j!==(i+1)%p.length)basePoints.push(p[j]);}
+        return {enabled:true,width:a.x-c.x,height:d.y-c.y,basePoints};
+      }
+    }
+    return {enabled:false,width:50,height:40,basePoints:p};
+  }
+  function setCornerExclusion(boundary,patch){
+    const spec={...cornerExclusion(boundary),...patch},p=spec.basePoints;
+    if(!Number.isFinite(spec.width)||!Number.isFinite(spec.height)||spec.width<=0||spec.height<=0||spec.width>500||spec.height>500||!Array.isArray(p)||!G.simple(p))return null;
+    const maxX=Math.max(...p.map(v=>v.x));
+    const i=p.findIndex((v,j)=>{const a=p[(j+p.length-1)%p.length],c=p[(j+1)%p.length];return Math.abs(v.x-maxX)<1e-5&&Math.abs(a.x-v.x)<1e-5&&a.y<v.y&&Math.abs(c.y-v.y)<1e-5&&c.x<v.x;});
+    if(i<0)return null;
+    const c=p[i],a=p[(i+p.length-1)%p.length],d=p[(i+1)%p.length];
+    if(spec.enabled&&(spec.height>=c.y-a.y||spec.width>=c.x-d.x))return null;
+    const points=spec.enabled?p.flatMap((v,j)=>j===i?[{x:c.x,y:c.y-spec.height},{x:c.x-spec.width,y:c.y-spec.height},{x:c.x-spec.width,y:c.y}]:[{...v}]):p.map(v=>({...v}));
+    if(!G.simple(points))return null;
+    return {...boundary,points,exclusion:{enabled:!!spec.enabled,width:spec.width,height:spec.height,basePoints:p.map(v=>({...v}))}};
+  }
+  return {selectRooms,extendWall,moveWall,remapDoors,cornerExclusion,setCornerExclusion};
 });

@@ -876,12 +876,12 @@
   }
   // Outline the union, rather than outlining/eroding its overlapping pieces.
   // Only edges separating solid wall from empty space survive this arrangement.
-  function unionBoundarySegments(pieces,openings=[]) {
+  function unionBoundarySegments(pieces,openings=[],intersection=false) {
     const bounds=p=>({minX:Math.min(...p.map(q=>q.x)),maxX:Math.max(...p.map(q=>q.x)),minY:Math.min(...p.map(q=>q.y)),maxY:Math.max(...p.map(q=>q.y))});
     const intersects=(a,b)=>a.minX<=b.maxX+EPS&&a.maxX>=b.minX-EPS&&a.minY<=b.maxY+EPS&&a.maxY>=b.minY-EPS;
     const items=pieces.map(p=>({p,hole:false})).concat(openings.map(p=>({p,hole:true}))).filter(i=>i.p.length>2&&area(i.p)>EPS).map(i=>({...i,box:bounds(i.p),edges:edges(i.p)}));
     const strictlyInside=(p,poly)=>{let yes=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){const a=poly[i],b=poly[j];if((a.y>p.y)!==(b.y>p.y)&&p.x<(b.x-a.x)*(p.y-a.y)/(b.y-a.y)+a.x)yes=!yes;}return yes;};
-    const filled=(p,list)=>list.some(i=>!i.hole&&strictlyInside(p,i.p))&&!list.some(i=>i.hole&&strictlyInside(p,i.p));
+    const filled=(p,list)=>intersection?pieces.every(poly=>strictlyInside(p,poly)):list.some(i=>!i.hole&&strictlyInside(p,i.p))&&!list.some(i=>i.hole&&strictlyInside(p,i.p));
     const key=p=>Math.round(p.x*1e6)+','+Math.round(p.y*1e6),segments=new Map();
     for(const item of items){
       const nearby=items.filter(i=>intersects(item.box,i.box));
@@ -904,8 +904,8 @@
     }
     return [...segments.values()];
   }
-  function unionOutline(pieces,openings=[]) {
-    const segments=unionBoundarySegments(pieces,openings);
+  function unionOutline(pieces,openings=[],intersection=false) {
+    const segments=unionBoundarySegments(pieces,openings,intersection);
     const outgoing=new Map();for(const e of segments){if(!outgoing.has(e.from))outgoing.set(e.from,[]);outgoing.get(e.from).push(e);}
     const contours=[];
     for(const start of segments){
