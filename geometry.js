@@ -545,9 +545,13 @@
   }
   function moveSelection(rooms,delta,others,boundaries,options={}) {
     if(rooms.some(r=>r.locked))return {rooms,message:'Unlock the selection before moving.',sliding:false};
+    // An imported room may already be outside. Let it travel back in without
+    // requiring every intermediate frame to be contained. Re-evaluate on the
+    // next drag so a repaired room obeys the boundary normally again.
+    const limitsFor=room=>boundaries.filter(b=>(!b.groupId||b.groupId===room.groupId)&&(!options.recoverOutside||contains(polygon((options.releaseRooms||rooms).find(r=>r.id===room.id)||room),b.points)));
     const corridors=others.filter(r=>r.type==='corridor');
     const cuts=corridorCuts(corridors,boundaries);
-    const shapes=rooms.map(room=>{const poly=polygon(room),half=Math.max(0,...(room.walls||[]).map(w=>w.kind==='opening'||w.kind==='curtain'?0:(w.thickness||6)/24)),clearCuts=cuts.map(c=>offsetOutline(c,-half));return {room,poly,clearCuts,clipped:clearCuts.some(c=>overlaps(poly,c)),boundaries:boundaries.filter(b=>!b.groupId||b.groupId===room.groupId)};});
+    const shapes=rooms.map(room=>{const poly=polygon(room),half=Math.max(0,...(room.walls||[]).map(w=>w.kind==='opening'||w.kind==='curtain'?0:(w.thickness||6)/24)),clearCuts=cuts.map(c=>offsetOutline(c,-half));return {room,poly,clearCuts,clipped:clearCuts.some(c=>overlaps(poly,c)),boundaries:limitsFor(room)};});
     const neighbors=others.filter(r=>r.type!=='corridor'),obstacles=neighbors.map(polygon).concat(cuts);
     const valid=offset=>shapes.every(({poly,clipped,clearCuts,boundaries:limits})=>{
       const moved=poly.map(p=>add(p,offset));
@@ -592,7 +596,7 @@
     const sliding=distance(offset,delta)>.001;
     let message=sliding?'Sliding along nearby walls.':shapes.some(s=>s.clipped)?'Room moved · corridor cutout recalculated.':'Room placed.';
     if(moved.length===1) {
-      const room=moved[0],limits=boundaries.filter(b=>!b.groupId||b.groupId===room.groupId).sort((a,b)=>Number(!!b.groupId)-Number(!!a.groupId));
+      const room=moved[0],limits=limitsFor(room).sort((a,b)=>Number(!!b.groupId)-Number(!!a.groupId));
       const fitted=settle(room,others,limits,options);
       // A drag must be able to detach an initial contact. Boundary fitting can
       // otherwise keep stretching a small room back to that wall at every frame.
@@ -605,7 +609,7 @@
       // Keep the live contact position if reshaping cannot fit. Never bounce to drag-start.
       if(fitted.room&&!retreats){moved=[fitted.room];message=fitted.aligned||fitted.move!==undefined?fitted.message:message;}
     }else{
-      const fitted=snapSelection(moved,others,boundaries,options);
+      const fitted=snapSelection(moved,others,boundaries.filter(b=>rooms.every(r=>b.groupId&&b.groupId!==r.groupId||limitsFor(r).includes(b))),options);
       if(fitted){moved=fitted.rooms;message=fitted.message;}
     }
     return {rooms:moved,sliding,message};

@@ -119,10 +119,11 @@
     }return svg;
   }
   function beginCorridorEdgeDrag(side,p){
-    const c=getCorridor(activeCorridor);if(!c||c.outline)return;
+    const c=getCorridor(activeCorridor);if(!c)return;
     selectedCorridorSide=null;selectedWall=selectedDoor=null;wallExtension=null;
     const n=c.points.length,reference={roomId:c.id};
-    if(side===n-1)reference.end=n-1;
+    if(c.outline)reference.outlineSide=side;
+    else if(side===n-1)reference.end=n-1;
     else if(side===2*n-1)reference.end=0;
     else reference.segment=side<n-1?side:2*n-2-side;
     drag={kind:'corridor-edge',start:p,reference,before:copy(model),moved:false};render();
@@ -132,14 +133,16 @@
     const delta=G.sub(p,drag.start);
     if(G.length(delta)*view.zoom<2&&!drag.moved)return;
     const source=drag.before.corridors.find(c=>c.id===drag.reference.roomId);
+    const limits=drag.before.boundaries.filter(b=>b.groupId||G.contains(G.polygon(source),b.points));
     const at=t=>{
       const points=copy(source.points),r=drag.reference;
+      if(r.outlineSide!==undefined){const edge=G.edges(source.outline)[r.outlineSide],normal=G.mul(G.inward(edge,source.outline),-1),outline=G.shiftedEdge(source.outline,r.outlineSide,G.dot(delta,normal)*t);return outline?{...source,outline}:null;}
       if(r.end!==undefined){const i=r.end,j=i===0?1:i-1,u=G.unit(G.sub(points[i],points[j]));points[i]=G.add(points[i],G.mul(u,G.dot(delta,u)*t));}
       else if(r.segment!==undefined){const i=r.segment,u=G.unit(G.sub(points[i+1],points[i])),n={x:-u.y,y:u.x},shift=G.mul(n,G.dot(delta,n)*t);points[i]=G.add(points[i],shift);points[i+1]=G.add(points[i+1],shift);}
       else points.forEach((q,i)=>points[i]=G.add(q,G.mul(delta,t)));
       return {...source,points,...(source.outline?{outline:source.outline.map(q=>G.add(q,G.mul(delta,t)))}:{})};
     };
-    const valid=c=>c.points.slice(1).every((p,i)=>G.dot(G.sub(p,c.points[i]),G.unit(G.sub(source.points[i+1],source.points[i])))>.25)&&G.validCorridor(c,drag.before.rooms,drag.before.boundaries);
+    const valid=c=>c&&c.points.slice(1).every((p,i)=>G.dot(G.sub(p,c.points[i]),G.unit(G.sub(source.points[i+1],source.points[i])))>.25)&&G.validCorridor(c,drag.before.rooms,limits);
     let t=0;const steps=Math.max(1,Math.ceil(G.length(delta)/.25));
     for(let i=1;i<=steps;i++){
       const target=i/steps;
@@ -148,12 +151,12 @@
       for(let j=0;j<18;j++){const mid=(lo+hi)/2;if(valid(at(mid)))lo=mid;else hi=mid;}
       t=lo;break;
     }
-    let moved=at(t);
-    const snapped=G.snapCorridorSegment(moved,drag.reference,drag.before.rooms,drag.before.boundaries,model.settings);
+    let moved=at(t)||source;
+    const snapped=G.snapCorridorSegment(moved,drag.reference,drag.before.rooms,limits,model.settings);
     if(snapped&&valid(snapped.corridor))moved=snapped.corridor;
     drag.moved=true;drag.result={offset:G.length(delta)*t,...(snapped&&valid(snapped.corridor)?{snapped:true,snapGuide:snapped.snapGuide,reshaped:true}:{})};
     wallPreview={rooms:drag.before.rooms,corridors:drag.before.corridors.map(c=>c.id===source.id?moved:c)};
-    draw();status((drag.reference.end!==undefined?'Corridor end extended / shortened':drag.reference.segment!==undefined?'Corridor segment moved':'Whole corridor moved')+' · width fixed'+(drag.result.snapped?' · snapped to parallel wall face':t<.999?' · stopped at boundary or minimum segment length':'')+'.');
+    draw();status((source.outline?'Custom corridor edge adjusted':drag.reference.end!==undefined?'Corridor end extended / shortened':'Corridor segment moved · width fixed')+(drag.result.snapped?' · snapped to parallel wall face':t<.999?' · stopped at boundary or minimum segment length':'')+'.');
   }
   function addCorridorEdgeControls(c){
     $('#inspector').insertAdjacentHTML('beforeend','<p class="hint">Click the interior to select only. Drag an edge or white square to adjust that segment; blue circles extend or shorten the ends. Width stays fixed. The whole corridor cannot be dragged.</p>');
@@ -213,7 +216,11 @@
     if(corridorRegion.length)svg+=`<path data-corridor="region" d="${corridorRegion.map(path).join(' ')}" fill-rule="evenodd" fill="#edf5f8" stroke="#9abcc8" stroke-width=".8"><title>Continuous corridor void · no walls</title></path>`;
     corridors.forEach(c=>{const p=G.polygon(c);svg+=`<path data-corridor="${c.id}" d="${path(p)}" fill="transparent" stroke="${activeCorridor===c.id?'#2d82a0':'none'}" stroke-width="1.5" stroke-dasharray="6 4"><title>${esc(c.name)} · wall-free corridor</title></path>`;});
     rooms.forEach(room=>{
-      const contours=G.roomFillContours(room,corridors,model.boundaries);if(!contours.length)return;
+      let contours=G.roomFillContours(room,corridors,model.boundaries);
+      // A corridor can hide an imported room completely. Selecting it in the
+      // room list exposes its footprint so it can still be grabbed and moved.
+      if(!contours.length&&selected.has(room.id))contours=[G.polygon(room)];
+      if(!contours.length)return;
       const points=[...contours].sort((a,b)=>G.area(b)-G.area(a))[0],center=screen(G.centroid(points)),outline=contours.map(path).join(' '),netArea=displayArea(room);
       svg+=`<path class="room-hit ${room.locked?'locked':''}" data-room="${room.id}" d="${outline}" fill-rule="evenodd" fill="${room.color}" fill-opacity="${isolatedRoom&&isolatedRoom!==room.id ? .2 : (selected.has(room.id)||drag?.hits?.includes(room.id)) ? .85 : .55}" stroke="${selected.has(room.id)?'#2e6abc':'none'}" stroke-width="6" stroke-opacity=".18"><title>${esc(room.name)} · ${fmt(netArea)} sf${room.locked?' · locked':''}</title></path>`;
       if(selected.has(room.id)&&!selectedWall){
@@ -244,8 +251,8 @@
     if(model.settings.boundaryReview===true){
       const site=model.boundaries.find(b=>!b.groupId);
       if(site){svg+='<path d="'+path(site.points)+'" fill="none" stroke="#235bb7" stroke-width="2" pointer-events="none"/>';
-        rooms.concat(corridors).filter(r=>!G.contains(G.polygon(r),site.points)).forEach(r=>{svg+='<path class="boundary-conflict" d="'+path(G.polygon(r))+'" fill="none" stroke="#cf433e" stroke-width="2" stroke-dasharray="6 4" pointer-events="none"><title>'+esc(r.name)+' crosses revised boundary — retained for refit</title></path>';});
       }
+      rooms.concat(corridors).filter(r=>model.boundaries.some(b=>(!b.groupId||r.type!=='corridor'&&b.groupId===r.groupId)&&!G.contains(G.polygon(r),b.points))||r.type!=='corridor'&&rooms.some(o=>o.id!==r.id&&G.overlaps(G.polygon(r),G.polygon(o)))).forEach(r=>{svg+='<path class="boundary-conflict" d="'+path(G.polygon(r))+'" fill="none" stroke="#cf433e" stroke-width="2" stroke-dasharray="6 4" pointer-events="none"><title>'+esc(r.name)+' has a layout conflict — retained for manual adjustment</title></path>';});
     }
     if(drag?.kind==='rooms'&&drag.moved&&preview){
       const moving=rooms.filter(r=>selected.has(r.id)),others=rooms.filter(r=>!selected.has(r.id)).concat(model.corridors);
@@ -647,7 +654,7 @@
     const anchor=drag.original.find(r=>r.id===drag.roomId),current=drag.lastGood.find(r=>r.id===drag.roomId);
     const remaining=G.sub(G.add(anchor,delta),current),others=drag.original.filter(r=>!selected.has(r.id)).concat(model.corridors);
     // Use the chosen physical snap distance for single rooms AND groups.
-    drag.placement=G.moveSelection(drag.lastGood,remaining,others,model.boundaries,{...model.settings,margin:model.settings.margin,ghostRooms:true,ghostCorridors:true,releaseRooms:drag.original.filter(r=>selected.has(r.id))});
+    drag.placement=G.moveSelection(drag.lastGood,remaining,others,model.boundaries,{...model.settings,margin:model.settings.margin,ghostRooms:true,ghostCorridors:true,recoverOutside:true,releaseRooms:drag.original.filter(r=>selected.has(r.id))});
     drag.lastGood=drag.placement.rooms;
     preview=drag.original.map(r=>drag.lastGood.find(next=>next.id===r.id)||r);
     status(drag.placement.message);draw();
@@ -825,8 +832,9 @@
       return {id,type:'corridor',name:String(c.name||'Corridor').slice(0,48),width:c.width,...(c.outline?{outline:c.outline.map(p=>({x:p.x,y:p.y}))}:{}),drawMode:c.drawMode==='free'?'free':points.slice(1).every((p,i)=>Math.abs(p.x-points[i].x)<G.EPS||Math.abs(p.y-points[i].y)<G.EPS)?'ortho':'free',points,walls:(c.outline||poly).map((_,i)=>sanitizeWall(c.walls?.[i]||{kind:i===points.length-1||i===poly.length-1?'opening':'wall'},next.settings.thickness))};
     });
     if(new Set(next.boundaries.map(b=>b.groupId)).size!==next.boundaries.length)throw Error('Only one boundary per group and one site boundary are supported.');
-    const validationBoundaries=next.settings.boundaryReview===true?next.boundaries.filter(b=>b.groupId):next.boundaries;
-    if(!groupValid(next.rooms,validationBoundaries,next.corridors))throw Error('The project contains overlapping rooms, rooms crossing corridors, or spaces outside their boundaries.');
+    // Layout conflicts are repairable, not malformed file data. Retain every
+    // valid entity exactly where it was saved and flag it instead of rejecting.
+    next.settings.boundaryReview=!groupValid(next.rooms,next.boundaries,next.corridors);
     if(value.doors!==undefined&&(!Array.isArray(value.doors)||value.doors.length>1500))throw Error('Use at most 1,500 hosted doors.');
     next.doors=(value.doors||[]).map(d=>{
       const id=cleanId(d.id),host=next.rooms.concat(next.corridors).find(e=>e.id===d.hostId);
@@ -836,7 +844,7 @@
     next.nextId=Math.max(0,...ids)+1;next.revision=Math.max(1,...next.rooms.concat(next.corridors).flatMap(r=>r.walls.flatMap(w=>[w.revision,...w.segments.map(s=>s.revision)])))+1;return H.migrate(next);
   }
   function sanitizeWall(w={},thickness=6){const spec={kind:['wall','door','curtain','opening','window'].includes(w.kind)?w.kind:'wall',thickness:Math.max(1,Math.min(36,Number(w.thickness)||thickness)),doorWidth:Math.max(.5,Math.min(12,Number(w.doorWidth)||3)),position:Math.max(0,Math.min(1,Number.isFinite(w.position)?w.position:.5)),hinge:w.hinge==='end'?'end':'start',swing:w.swing===-1?-1:1,revision:Math.max(0,Math.min(1e6,Number(w.revision)||0)),segments:[]};spec.segments=(Array.isArray(w.segments)?w.segments:[]).slice(-200).map(e=>{const part=sanitizeWall({...e,segments:[]},thickness);delete part.segments;return {...part,from:Math.max(0,Math.min(1,Number(e.from)||0)),to:Math.max(0,Math.min(1,Number(e.to)||1))};});return spec;}
-  $('#file').onchange=async event=>{try{const file=event.target.files[0];if(!file)return;if(file.size>3e6)throw Error('Project file is too large.');const next=validateFile(JSON.parse(await file.text()));checkpoint();model=next;selected.clear();activeCorridor=activeGroup=selectedWall=selectedDoor=null;isolatedRoom=wallExtension=selectedCorridorSide=null;doorPlacement=drawing=stoppedDrawing=drag=preview=wallPreview=null;syncSettings();render();fit();status('Project opened.');}catch(error){status('Could not open: '+error.message);}event.target.value='';};
+  $('#file').onchange=async event=>{try{const file=event.target.files[0];if(!file)return;if(file.size>3e6)throw Error('Project file is too large.');const next=validateFile(JSON.parse(await file.text()));checkpoint();model=next;selected.clear();activeCorridor=activeGroup=selectedWall=selectedDoor=null;isolatedRoom=wallExtension=selectedCorridorSide=null;doorPlacement=drawing=stoppedDrawing=drag=preview=wallPreview=null;syncSettings();render();fit();status(model.settings.boundaryReview?'Project opened with layout conflicts. Nothing moved or removed. Drag rooms into a clear spot; select corridors and drag their edges to refit. Red outlines mark conflicts.':'Project opened.');}catch(error){status('Could not open: '+error.message);}event.target.value='';};
   $('#export').onclick=()=>{const previous={...view},oldSelection=selected,oldCorridor=activeCorridor,oldWall=selectedWall,oldDoor=selectedDoor,oldPlacement=doorPlacement,oldIsolation=isolatedRoom;isolatedRoom=doorPlacement=null;selected=new Set();activeCorridor=selectedWall=selectedDoor=null;fit();const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${size.width}" height="${size.height}" viewBox="0 0 ${size.width} ${size.height}"><title>TestFit Light schematic plan — dimensions in feet</title>${plan.innerHTML}</svg>`;download('testfit-light.svg',svg,'image/svg+xml');view=previous;selected=oldSelection;activeCorridor=oldCorridor;selectedWall=oldWall;selectedDoor=oldDoor;doorPlacement=oldPlacement;isolatedRoom=oldIsolation;draw();status('Plan exported as SVG. This screen-scale export is not a calibrated construction drawing.');};
   $('#blank').onclick=()=>{checkpoint();model=defaultModel();selected.clear();activeCorridor=selectedWall=selectedDoor=activeGroup=null;isolatedRoom=wallExtension=selectedCorridorSide=null;doorPlacement=drawing=stoppedDrawing=drag=preview=wallPreview=null;syncSettings();render();fit();status('Blank project. Create a room or draw a boundary. Undo restores your previous plan.');};$('#sample').onclick=()=>{checkpoint();sample();syncSettings();};
   if($('#loadLayout'))$('#loadLayout').onclick=()=>{const variant=$('#layoutChoice').value;checkpoint();sample(variant);syncSettings();};
