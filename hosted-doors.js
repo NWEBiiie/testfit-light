@@ -50,6 +50,29 @@
       .map(([a,b])=>Math.max(a+door.width/2+.05,Math.min(b-door.width/2-.05,target))).sort((a,b)=>Math.abs(a-target)-Math.abs(b-target));
     return choices.length?{...door,position:choices[0]/f.length}:null;
   }
+  function autoPlace(door,entities,network,doors=[]){
+    const f=frame(door,entities);if(!f||!Number.isFinite(door.position)||!Number.isFinite(door.width)||door.width<.5||door.width>12)return null;
+    const target=door.position*f.length,at=p=>dot(sub(p,f.edge.a),f.u),perpendicular=[];
+    // Use the physical wall face, not its centerline, for the six-inch jamb
+    // clearance. Room corners and perpendicular T-junctions both count.
+    for(const w of network){
+      if(!['wall','door'].includes(w.style.kind))continue;
+      const v=unit(sub(w.b,w.a));if(Math.abs(dot(f.u,v))>1e-5)continue;
+      const q=add(f.edge.a,mul(f.u,cross(sub(w.a,f.edge.a),v)/cross(f.u,v))),offset=at(q);
+      if(offset<-.02||offset>f.length+.02||distance(q,G.closest(q,w.a,w.b))>.015)continue;
+      perpendicular.push({offset,half:(w.style.thickness||6)/24});
+    }
+    let ranges=runs(door,entities,network,doors);
+    for(const wall of perpendicular)ranges=subtract(ranges,wall.offset-wall.half-.45,wall.offset+wall.half+.45);
+    // The ordinary 0.05-ft insertion tolerance makes .45 + .05 = .50 ft.
+    const choices=ranges.filter(([a,b])=>b-a>=door.width+.1-1e-6).map(([a,b])=>Math.max(a+door.width/2+.05,Math.min(b-door.width/2-.05,target))).sort((a,b)=>Math.abs(a-target)-Math.abs(b-target));
+    if(!choices.length)return null;
+    const offset=choices[0],nearest=perpendicular.slice().sort((a,b)=>Math.abs(a.offset-offset)-a.half-(Math.abs(b.offset-offset)-b.half))[0];
+    const hinge=nearest?(nearest.offset<=offset?'start':'end'):(offset<=f.length/2?'start':'end');
+    const closedDirection=door.leaves===2||hinge==='start'?f.u:mul(f.u,-1),inward=G.inward(f.edge,polygon(f.host));
+    const swing=dot(G.rotate(closedDirection,90),inward)>=0?1:-1;
+    return {...door,position:offset/f.length,hinge,swing};
+  }
   function resolve(door,entities,network,doors=[]){
     const o=opening(door,entities);if(!o)return null;
     if(!runs(door,entities,network,doors).some(([a,b])=>o.offset-o.width/2>=a+.049&&o.offset+o.width/2<=b-.049))return null;
@@ -93,5 +116,5 @@
     }));
     model.version=Math.max(7,model.version||0);return model;
   }
-  return {frame,opening,runs,place,resolve,resolveAll,migrate};
+  return {frame,opening,runs,place,autoPlace,resolve,resolveAll,migrate};
 });

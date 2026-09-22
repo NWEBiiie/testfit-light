@@ -285,7 +285,7 @@
   const input=(id,label,value,extra='')=>`<label>${label}<input id="${id}" value="${esc(value)}" ${extra}></label>`;
   function renderInspector(){
     const panel=$('#inspector'),room=one(),wall=walls.find(w=>w.id===selectedWall);
-    if(doorPlacement){$('#inspectorTitle').textContent='Door brush';panel.innerHTML='<div class="notice">Click any solid room wall to add a door. Keep clicking to add more doors on the same wall or other rooms—no room selection needed. Each door stays hosted on its wall. Undo removes one placement at a time.</div><button id="cancelDoorPlacement" class="wide">Stop adding doors · Escape</button>';$('#cancelDoorPlacement').onclick=beginDoorPlacement;return;}
+    if(doorPlacement){$('#inspectorTitle').textContent='Door brush';panel.innerHTML='<div class="notice">Click any solid room wall to add a door. Keep clicking to add more doors on the same wall or other rooms—no room selection needed. Doors swing inward, hinge toward the nearest perpendicular wall and leave six inches of corner clearance. Each door stays hosted on its wall. Undo removes one placement at a time.</div><button id="cancelDoorPlacement" class="wide">Stop adding doors · Escape</button>';$('#cancelDoorPlacement').onclick=beginDoorPlacement;return;}
     if(selectedDoor&&model.doors.some(d=>d.id===selectedDoor)){renderDoorInspector();return;}
     if(selectedWall&&wall){
       const spec=wall.style,owners=wall.owners.map(o=>getEntity(o.roomId)?.name).join(' + ');
@@ -503,8 +503,8 @@
     const host=G.wallReference(wall,obstacles(),one()?.id),edge=G.edges(G.polygon(getEntity(host.roomId)))[host.side],delta=G.sub(edge.b,edge.a);
     const position=G.dot(G.sub(point||G.mul(G.add(wall.a,wall.b),.5),edge.a),delta)/G.dot(delta,delta);
     const candidate={id:model.nextId,hostId:host.roomId,side:host.side,width:Math.min(3,Math.floor((wall.length-.6)*4)/4),position,hinge:'start',swing:1};
-    const placed=H.place(candidate,obstacles(),walls,model.doors);
-    if(!placed){status('No clear span for a door on this wall. A door needs room between corners and other doors.');return;}
+    const placed=H.autoPlace(candidate,obstacles(),walls,model.doors);
+    if(!placed){status('No clear span for this door with six-inch clearance from perpendicular walls. Try another wall or position.');return;}
     checkpoint();model.nextId++;model.doors.push(placed);
     if(doorPlacement){doorPlacement.hover=null;render();status('Door added. Keep clicking any solid room wall to add more. Stop adding doors or Escape finishes.');}
     else{chooseDoor(placed.id);status('Door added on its host wall. Drag the door along the wall, or edit its width and position. The wall was not split.');}
@@ -514,8 +514,9 @@
     const proposed={...door,...patch};
     if(!Number.isFinite(proposed.position)||proposed.position<0||proposed.position>1){status('Position must be on the host wall.');renderInspector();return;}
     // Hinge/swing edits remain available even if a corridor currently covers it.
-    const placed=('width' in patch||'position' in patch)?H.place(proposed,obstacles(),walls,model.doors):proposed;
+    const placed=('position' in patch||'leaves' in patch)?H.autoPlace(proposed,obstacles(),walls,model.doors):'width' in patch?H.place(proposed,obstacles(),walls,model.doors):proposed;
     if(!placed){status('That door will not fit on a clear solid wall. Try a smaller width or restore its host wall.');renderInspector();return;}
+    if('hinge' in patch)placed.hinge=patch.hinge;if('swing' in patch)placed.swing=patch.swing;
     checkpoint();Object.assign(door,placed);render();status('Door updated. Host wall and room dimensions unchanged.');
   }
   function deleteDoor(){
@@ -544,9 +545,9 @@
     if(drag?.kind!=='door')return;const f=H.frame(drag.original,obstacles());if(!f)return;
     const delta=G.dot(G.sub(p,drag.start),f.u);if(Math.abs(delta)*view.zoom<2&&!drag.moved)return;
     const proposed={...drag.original,position:(drag.offset+delta)/f.length};
-    const placed=H.place(proposed,obstacles(),walls,model.doors);
+    const placed=H.autoPlace(proposed,obstacles(),walls,model.doors);
     if(!placed)return;drag.moved=true;drag.doorPreview=placed;draw();
-    status('Door center: '+fmt(placed.position*f.length)+' ft from endpoint A. Wall stays continuous.');
+    status('Door center: '+fmt(placed.position*f.length)+' ft from endpoint A. Inward swing · hinge toward nearest perpendicular wall · six-inch corner clearance.');
   }
   function editWall(patch){
     const wall=walls.find(w=>w.id===selectedWall);if(!wall)return;
