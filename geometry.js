@@ -924,5 +924,36 @@
     }
     return contours;
   }
-  return {roomFillContours,curtainFace,snapCorridorSegment,interiorOutline,offsetOutline,EPS,add,sub,mul,dot,cross,length,distance,unit,rotate,normalize,nearestAngle,edges,area,centroid,baseOutline,polygon,closest,inside,contains,overlaps,simple,inward,fitInside,alignToEdge,cornerFits,validBoundaryFit,validPlacement,settle,moveSelection,wallNetwork,shiftedEdge,withManualOutline,wallReference,shiftWall,snapWallDrag,sideLengthMove,doorOpening,wallJoins,wallMass,corridorPoint,corridorPolygon,validCorridor,corridorCuts,roomContours,contourArea,insideContours,contoursOverlap,secondarySnap,snapSelection,alignGroupBottom,alignRoomEdges,unionOutline,unionBoundarySegments,contactEdges};
+  const hatchMetricCache=new WeakMap();
+  function hatchMetrics(room,corridors=[],boundaries=[]){
+    const key=JSON.stringify([room,corridors,boundaries]),cached=hatchMetricCache.get(room);
+    if(cached?.key===key)return cached.value;
+    // Measure the visible colored footprint: curtain/open/window face extensions
+    // are included; physical wall thickness and circulation are not usable area.
+    // Door thresholds do not enlarge the room measurement.
+    const mass=wallMass(wallNetwork([room]),0,[],[room]);
+    const contours=unionOutline(roomFillContours(room),mass.pieces.concat(corridorCuts(corridors,boundaries)));
+    const local=contours.flat().map(p=>rotate(sub(p,room),-room.angle));
+    const width=local.length?Math.max(...local.map(p=>p.x))-Math.min(...local.map(p=>p.x)):0;
+    const depth=local.length?Math.max(...local.map(p=>p.y))-Math.min(...local.map(p=>p.y)):0;
+    const value={width,depth,area:contourArea(contours),contours};hatchMetricCache.set(room,{key,value});return value;
+  }
+  function hatchSizePatch(room,field,target,corridors=[],boundaries=[]){
+    if(!['width','depth','area'].includes(field)||!Number.isFinite(target)||target<=0)throw Error('Enter a positive hatch dimension.');
+    const axis=field==='area'?'depth':field;
+    const candidate=size=>{
+      const next={...room,[axis]:size};
+      if(room.boundaryFit?.manual)next.boundaryFit={...room.boundaryFit,points:room.boundaryFit.points.map(p=>({x:p.x*next.width/room.width,y:p.y*next.depth/room.depth}))};
+      else next.boundaryFit=null;
+      return next;
+    };
+    const measure=size=>hatchMetrics(candidate(size),corridors,boundaries)[field];
+    let lo=2,hi=500;
+    if(target<measure(lo)-.00001||target>measure(hi)+.00001)throw Error('That hatch size cannot fit within the supported room dimensions.');
+    for(let i=0;i<35;i++){const mid=(lo+hi)/2;if(measure(mid)<target)lo=mid;else hi=mid;}
+    const size=(lo+hi)/2;
+    if(Math.abs(measure(size)-target)>.001)throw Error('That hatch size cannot be reached with the current outline and corridor cutouts.');
+    return {[axis]:size};
+  }
+  return {hatchMetrics,hatchSizePatch,roomFillContours,curtainFace,snapCorridorSegment,interiorOutline,offsetOutline,EPS,add,sub,mul,dot,cross,length,distance,unit,rotate,normalize,nearestAngle,edges,area,centroid,baseOutline,polygon,closest,inside,contains,overlaps,simple,inward,fitInside,alignToEdge,cornerFits,validBoundaryFit,validPlacement,settle,moveSelection,wallNetwork,shiftedEdge,wallReference,withManualOutline,shiftWall,snapWallDrag,sideLengthMove,doorOpening,wallJoins,wallMass,corridorPoint,corridorPolygon,validCorridor,corridorCuts,roomContours,contourArea,insideContours,contoursOverlap,secondarySnap,snapSelection,alignGroupBottom,alignRoomEdges,unionOutline,unionBoundarySegments,contactEdges};
 });
