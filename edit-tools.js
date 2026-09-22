@@ -254,5 +254,26 @@
     if(!G.simple(points))return null;
     return {...boundary,points,exclusion:{enabled:!!spec.enabled,width:spec.width,height:spec.height,basePoints:p.map(v=>({...v}))}};
   }
-  return {selectRooms,extendWall,moveWall,remapDoors,cornerExclusion,setCornerExclusion};
+  function svgStraightPath(data){
+    if(typeof data!=='string'||data.length>50000||/[^MLHVZmlhvz0-9eE+.,\s-]/.test(data))throw Error('Use a closed straight-sided path (M, L, H, V, Z); convert curves to straight segments first.');
+    const tokens=data.match(/[MLHVZmlhvz]|[-+]?(?:\d*\.\d+|\d+\.?\d*)(?:[eE][-+]?\d+)?/g)||[];
+    let i=0,cmd='',x=0,y=0,closed=false;const points=[];
+    const number=()=>{const v=Number(tokens[i++]);if(!Number.isFinite(v))throw Error('Invalid SVG coordinate.');return v;};
+    while(i<tokens.length){
+      if(/[a-z]/i.test(tokens[i])&&!/^[-+\d.]/.test(tokens[i]))cmd=tokens[i++];
+      const upper=cmd.toUpperCase(),relative=cmd!==upper;
+      if(upper==='Z'){closed=true;if(i!==tokens.length)throw Error('Use one outline per path, without holes or extra subpaths.');break;}
+      if(upper==='M'&&points.length)throw Error('Use one outline per path.');
+      if(!points.length&&upper!=='M')throw Error('Start the SVG path with M.');
+      if(upper==='M'||upper==='L'){const a=number(),b=number();x=relative?x+a:a;y=relative?y+b:b;if(upper==='M')cmd=relative?'l':'L';}
+      else if(upper==='H'){const a=number();x=relative?x+a:a;}
+      else if(upper==='V'){const a=number();y=relative?y+a:a;}
+      else throw Error('Unsupported SVG path.');
+      points.push({x,y});if(points.length>101)throw Error('Use at most 100 boundary corners.');
+    }
+    if(points.length>1&&G.distance(points[0],points.at(-1))<1e-7)points.pop();
+    if(!closed||points.length<3||points.length>100||!G.simple(points))throw Error('Use a closed, non-crossing boundary with 3–100 corners.');
+    return points;
+  }
+  return {selectRooms,extendWall,moveWall,remapDoors,cornerExclusion,setCornerExclusion,svgStraightPath};
 });
