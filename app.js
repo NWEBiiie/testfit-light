@@ -746,7 +746,9 @@
     $('#resetExclusion').onclick=()=>editExclusion({enabled:true,width:50,height:40});
   }
   let svgCandidates=[],boundaryImportType='SVG';
-  $('#svgChoose').insertAdjacentHTML('beforebegin',`<details id="boundaryPointsEditor" open><summary>New boundary from points</summary><p class="hint" id="boundaryPointsHelp">Enter corners in order around the boundary, in feet. X goes right; Y goes down. The last point connects back to the first. Accepts [[x,y],…], [{"x":0,"y":0},…], or {"points":[…]}.</p><label>Boundary points · JSON<textarea id="boundaryPoints" rows="8" spellcheck="false" aria-describedby="boundaryPointsHelp" placeholder='[[0,0],[100,0],[100,80],[0,80]]'></textarea></label><div class="two"><button id="boundaryPointsCurrent" type="button">Use current boundary</button><button id="boundaryPointsExample" type="button">Load example</button></div><button id="boundaryPointsPreview" type="button" class="wide">Preview points</button><p class="hint">Preview does not change your plan. Then choose “Replace boundary · keep rooms in place” or a separate study below, and Apply.</p></details>`);
+  const boundaryPointsExample='{\n  "points": [\n    {"x": 0, "y": 0},\n    {"x": 100, "y": 0},\n    {"x": 100, "y": 80},\n    {"x": 0, "y": 80}\n  ]\n}';
+  $('#svgChoose').insertAdjacentHTML('beforebegin',`<details id="boundaryPointsEditor" open><summary>New boundary from points · X / Y</summary><p class="hint" id="boundaryPointsHelp">Use the same "points" object as the saved JSON file, with an "x" and "y" value for each corner. Edit the example below or load your current boundary. Values are feet; X goes right and Y goes down. List corners around the perimeter; the last connects to the first. JSON uses a colon (:) after each name, not an equals sign.</p><label>Boundary points · named X / Y<textarea id="boundaryPoints" rows="10" spellcheck="false" aria-describedby="boundaryPointsHelp"></textarea></label><div class="two"><button id="boundaryPointsCurrent" type="button">Use current boundary</button><button id="boundaryPointsExample" type="button">Load X / Y example</button></div><button id="boundaryPointsPreview" type="button" class="wide">Preview points</button><p class="hint">Preview does not change your plan. Then choose “Replace boundary · keep rooms in place” or a separate study below, and Apply.</p></details>`);
+  $('#boundaryPoints').value=boundaryPointsExample;
   function clearBoundaryImport(message=''){
     svgCandidates=[];$('#svgApply').disabled=true;$('#svgOutline').innerHTML='';$('#svgPreview').textContent='';$('#svgNotice').textContent=message;
   }
@@ -763,7 +765,7 @@
       const source=$('#boundaryPoints').value.trim().replace(/^\uFEFF/,'');
       if(!source)throw Error('Enter boundary points or load an example first.');
       if(source.length>3e6)throw Error('Use less than 3 MB of point data.');
-      let value;try{value=JSON.parse(source);}catch(e){throw Error('Invalid JSON. Use [[0,0],[100,0],[100,80],[0,80]] or {"points":[{"x":0,"y":0},…]}. Use double quotes and no trailing commas.');}
+      let value;try{value=JSON.parse(source);}catch(e){throw Error('Invalid JSON. Use the "points" object with named "x" and "y" values. Click Load X / Y example for a complete sample. Use colons (:), double quotes and no trailing commas.');}
       svgCandidates=E.jsonBoundaryCandidates(value);boundaryImportType='JSON';
       showBoundaryCandidates('Pasted points · '+svgCandidates.length+' outlines. Coordinates preserved in feet unless you change width or X/Y below.');
     }catch(e){clearBoundaryImport(e.message);}
@@ -774,7 +776,7 @@
     $('#boundaryPoints').value=JSON.stringify({points:site.points},null,2);$('#boundaryPoints').oninput();
   };
   $('#boundaryPointsExample').onclick=()=>{
-    $('#boundaryPoints').value='[[0,0],[100,0],[100,80],[0,80]]';$('#boundaryPoints').oninput();
+    $('#boundaryPoints').value=boundaryPointsExample;$('#boundaryPoints').oninput();
   };
   function svgImportPoints(){
     const item=svgCandidates[Number($('#svgOutline').value)];if(!item)throw Error('Choose an SVG or JSON outline first.');
