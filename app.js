@@ -746,6 +746,36 @@
     $('#resetExclusion').onclick=()=>editExclusion({enabled:true,width:50,height:40});
   }
   let svgCandidates=[],boundaryImportType='SVG';
+  $('#svgChoose').insertAdjacentHTML('beforebegin',`<details id="boundaryPointsEditor" open><summary>New boundary from points</summary><p class="hint" id="boundaryPointsHelp">Enter corners in order around the boundary, in feet. X goes right; Y goes down. The last point connects back to the first. Accepts [[x,y],…], [{"x":0,"y":0},…], or {"points":[…]}.</p><label>Boundary points · JSON<textarea id="boundaryPoints" rows="8" spellcheck="false" aria-describedby="boundaryPointsHelp" placeholder='[[0,0],[100,0],[100,80],[0,80]]'></textarea></label><div class="two"><button id="boundaryPointsCurrent" type="button">Use current boundary</button><button id="boundaryPointsExample" type="button">Load example</button></div><button id="boundaryPointsPreview" type="button" class="wide">Preview points</button><p class="hint">Preview does not change your plan. Then choose “Replace boundary · keep rooms in place” or a separate study below, and Apply.</p></details>`);
+  function clearBoundaryImport(message=''){
+    svgCandidates=[];$('#svgApply').disabled=true;$('#svgOutline').innerHTML='';$('#svgPreview').textContent='';$('#svgNotice').textContent=message;
+  }
+  function showBoundaryCandidates(message){
+    $('#svgOutline').innerHTML=svgCandidates.map((c,i)=>'<option value="'+i+'">'+esc(c.name)+'</option>').join('');$('#svgOutline').value='0';
+    const site=model.boundaries.find(b=>!b.groupId),p=boundaryImportType==='JSON'?svgCandidates[0].points:site?.points||svgCandidates[0].points;
+    $('#svgWidth').value=Math.max(...p.map(v=>v.x))-Math.min(...p.map(v=>v.x));$('#svgX').value=Math.min(...p.map(v=>v.x));$('#svgY').value=Math.min(...p.map(v=>v.y));
+    $('#svgNotice').textContent=message;previewSvgBoundary();
+  }
+  $('#boundaryPoints').oninput=()=>clearBoundaryImport('Points changed. Preview again before applying.');
+  $('#boundaryPointsPreview').onclick=()=>{
+    clearBoundaryImport();
+    try{
+      const source=$('#boundaryPoints').value.trim().replace(/^\uFEFF/,'');
+      if(!source)throw Error('Enter boundary points or load an example first.');
+      if(source.length>3e6)throw Error('Use less than 3 MB of point data.');
+      let value;try{value=JSON.parse(source);}catch(e){throw Error('Invalid JSON. Use [[0,0],[100,0],[100,80],[0,80]] or {"points":[{"x":0,"y":0},…]}. Use double quotes and no trailing commas.');}
+      svgCandidates=E.jsonBoundaryCandidates(value);boundaryImportType='JSON';
+      showBoundaryCandidates('Pasted points · '+svgCandidates.length+' outlines. Coordinates preserved in feet unless you change width or X/Y below.');
+    }catch(e){clearBoundaryImport(e.message);}
+  };
+  $('#boundaryPointsCurrent').onclick=()=>{
+    const site=model.boundaries.find(b=>!b.groupId);
+    if(!site){clearBoundaryImport('No site boundary yet. Enter points or load the example.');return;}
+    $('#boundaryPoints').value=JSON.stringify({points:site.points},null,2);$('#boundaryPoints').oninput();
+  };
+  $('#boundaryPointsExample').onclick=()=>{
+    $('#boundaryPoints').value='[[0,0],[100,0],[100,80],[0,80]]';$('#boundaryPoints').oninput();
+  };
   function svgImportPoints(){
     const item=svgCandidates[Number($('#svgOutline').value)];if(!item)throw Error('Choose an SVG or JSON outline first.');
     const width=Number($('#svgWidth').value),x=Number($('#svgX').value),y=Number($('#svgY').value);
@@ -762,7 +792,7 @@
   }
   $('#svgChoose').onclick=()=>$('#svgFile').click();
   $('#svgFile').onchange=async event=>{
-    const file=event.target.files?.[0];if(!file)return;svgCandidates=[];$('#svgApply').disabled=true;
+    const file=event.target.files?.[0];if(!file)return;clearBoundaryImport();
     try{
       if(file.size>3e6)throw Error('Choose an SVG or JSON smaller than 3 MB.');
       const source=(await file.text()).replace(/^\uFEFF/,'');boundaryImportType=/\.json$/i.test(file.name)||/^\s*[\[{]/.test(source)?'JSON':'SVG';
@@ -783,15 +813,12 @@
       }
       if(!svgCandidates.length)throw Error('No supported outline found. Export a closed polygon or straight M/L/H/V/Z path; flatten transforms, styles and clipping. Curves and compound paths are not supported.');
       }
-      $('#svgOutline').innerHTML=svgCandidates.map((c,i)=>'<option value="'+i+'">'+esc(c.name)+'</option>').join('');$('#svgOutline').value='0';
-      const site=model.boundaries.find(b=>!b.groupId),p=boundaryImportType==='JSON'?svgCandidates[0].points:site?.points||svgCandidates[0].points;
-      $('#svgWidth').value=Math.max(...p.map(v=>v.x))-Math.min(...p.map(v=>v.x));$('#svgX').value=Math.min(...p.map(v=>v.x));$('#svgY').value=Math.min(...p.map(v=>v.y));
-      $('#svgNotice').textContent=file.name+' · '+svgCandidates.length+' outlines available'+(skipped?' · '+skipped+' unsupported shapes skipped.':'');previewSvgBoundary();
-    }catch(e){$('#svgNotice').textContent=e.message;$('#svgOutline').innerHTML='';$('#svgPreview').textContent='';}
+      showBoundaryCandidates(file.name+' · '+svgCandidates.length+' outlines available'+(skipped?' · '+skipped+' unsupported shapes skipped.':''));
+    }catch(e){clearBoundaryImport(e.message);}
     event.target.value='';
   };
   for(const id of ['svgOutline','svgWidth','svgX','svgY']){$('#'+id).onchange=previewSvgBoundary;$('#'+id).oninput=previewSvgBoundary;}
-  $('#svgOutline').onchange=()=>{if(boundaryImportType==='JSON'){const p=svgCandidates[Number($('#svgOutline').value)].points;$('#svgWidth').value=Math.max(...p.map(v=>v.x))-Math.min(...p.map(v=>v.x));$('#svgX').value=Math.min(...p.map(v=>v.x));$('#svgY').value=Math.min(...p.map(v=>v.y));}previewSvgBoundary();};
+  $('#svgOutline').onchange=()=>{if(boundaryImportType==='JSON'&&svgCandidates[Number($('#svgOutline').value)]){const p=svgCandidates[Number($('#svgOutline').value)].points;$('#svgWidth').value=Math.max(...p.map(v=>v.x))-Math.min(...p.map(v=>v.x));$('#svgX').value=Math.min(...p.map(v=>v.x));$('#svgY').value=Math.min(...p.map(v=>v.y));}previewSvgBoundary();};
   $('#svgApply').onclick=()=>{try{
     const points=svgImportPoints(),only=$('#svgMode').value==='study';checkpoint();
     if(only){model=defaultModel();selected.clear();selectedWall=selectedDoor=activeGroup=activeCorridor=null;}
