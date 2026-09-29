@@ -26,6 +26,12 @@ Tests sample five points across each of twelve physical curtain faces, using obs
 
 ## Remaining design issues
 
+### Closed facade update
+
+Left and bottom exterior walls, including the lower-left chamfer, are no-access facades. Door insertion and open passages are blocked where room walls touch these faces. Solid facade or fixed glazing remains possible. The exact boundary, room positions, corridors and right-side arrival/discharge recesses are unchanged. The restriction is saved with the boundary and survives JSON export/import; historical layouts remain archived unchanged.
+
+Seven exterior doors were removed from the current default: Mechanical/HVAC/boiler, Electrical, Emergency electrical, R.O. water/utility, Medical gas, Receiving/equipment storage, and Bio waste/Neptune. These rooms are explicitly flagged for new service access. Their replacement route is unresolved; this update does not assume service traffic may pass through public/patient rooms. This is not an access-complete layout until that service route is designed.
+
 This is a schematic arrangement, not a construction or clinical approval plan.
 
 - Clean/dirty transport is not segregated: ORs, processing and discharge still share the patient spine and transfer connections. ORs currently have a single patient-side double-door opening; a separate clean-side OR access system is not resolved.

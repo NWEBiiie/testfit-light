@@ -23,7 +23,7 @@
   function runs(door,entities,network,doors=[]){
     const f=frame(door,entities);if(!f)return [];
     const at=p=>dot(sub(p,f.edge.a),f.u);
-    const spans=network.filter(w=>w.style.kind==='wall'&&w.owners.some(o=>o.roomId===door.hostId&&o.side===door.side))
+    const spans=network.filter(w=>!w.noAccess&&w.style.kind==='wall'&&w.owners.some(o=>o.roomId===door.hostId&&o.side===door.side))
       .map(w=>[Math.min(at(w.a),at(w.b)),Math.max(at(w.a),at(w.b))]).sort((a,b)=>a[0]-b[0]);
     let merged=[];
     spans.forEach(([a,b])=>{const last=merged.at(-1);if(last&&a<=last[1]+.02)last[1]=Math.max(last[1],b);else merged.push([a,b]);});

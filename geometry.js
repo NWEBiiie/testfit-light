@@ -684,25 +684,31 @@
     const sites=boundaries.filter(b=>!b.groupId&&b.points?.length>=3);
     if(!sites.length)return walls;
     return walls.flatMap(w=>{
-      if(!['wall','door'].includes(w.style.kind))return [w];
       const u=unit(sub(w.b,w.a)),len=distance(w.a,w.b),half=(w.style.thickness||6)/24,contacts=[];
       for(const site of sites)for(const e of edges(site.points)){
+        const noAccess=facadeEdge(site,e);
+        if(!noAccess&&!['wall','door'].includes(w.style.kind))continue;
         if(Math.abs(cross(u,unit(sub(e.b,e.a))))>1e-6)continue;
         const n=inward(e,site.points),gap=dot(sub(w.a,e.a),n);
         if(gap< -1e-6||gap>half+1e-6)continue;
         if(!w.owners.every(o=>{const r=rooms.find(r=>r.id===o.roomId);return r&&dot(inward({a:o.a,b:o.b},polygon(r)),n)>.99999;}))continue;
         const span=[e.a,e.b].map(p=>dot(sub(p,w.a),u)),lo=Math.max(0,Math.min(...span)),hi=Math.min(len,Math.max(...span));
-        if(hi-lo>1e-6)contacts.push({lo,hi,n,gap});
+        if(hi-lo>1e-6)contacts.push({lo,hi,n,gap,noAccess});
       }
       if(!contacts.length)return [w];
       const stops=[...new Set([0,len,...contacts.flatMap(c=>[c.lo,c.hi])])].sort((a,b)=>a-b),result=[];
       for(let i=1;i<stops.length;i++){
         const lo=stops[i-1],hi=stops[i];if(hi-lo<1e-6)continue;
         const a=add(w.a,mul(u,lo)),b=add(w.a,mul(u,hi)),c=contacts.find(c=>(lo+hi)/2>=c.lo&&(lo+hi)/2<=c.hi);
-        result.push({...w,id:w.id+':shell:'+i,a,b,length:hi-lo,...(c?{shell:{a:sub(a,mul(c.n,c.gap)),b:sub(b,mul(c.n,c.gap))}}:{})});
+        result.push({...w,id:w.id+':shell:'+i,a,b,length:hi-lo,...(c?{shell:{a:sub(a,mul(c.n,c.gap)),b:sub(b,mul(c.n,c.gap))},noAccess:c.noAccess,...(c.noAccess&&w.style.kind!=='window'?{style:{...w.style,kind:'wall'}}:{})}:{})});
       }
       return result;
     });
+  }
+  function facadeEdge(site,edge){
+    if(site.groupId||!site.noAccessFaces?.length)return false;
+    const n=inward(edge,site.points),face=Math.abs(n.x)>Math.abs(n.y)?(n.x>0?'left':'right'):(n.y<0?'bottom':'top');
+    return site.noAccessFaces.includes(face);
   }
   function shiftedEdge(points,side,offset) {
     if(!Number.isFinite(offset)||!Number.isInteger(side)||!points[side])return null;
