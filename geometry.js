@@ -306,8 +306,13 @@
     return (wall?.segments||[]).filter(s=>at>=s.from-EPS&&at<=s.to+EPS).sort((a,b)=>(b.revision||0)-(a.revision||0))[0]?.kind||wall?.kind||'wall';
   }
   function roomFillContours(room,corridors=[],boundaries=[]) {
-    const pieces=[offsetOutline(polygon(room),edges(polygon(room)).map(e=>['curtain','opening','window'].includes(faceKind(room,e.index))?-faceThickness(room,e.index)/24:0))];
-    for(const wall of wallNetwork([room])){
+    const network=wallNetwork([room],6,boundaries);
+    const pieces=[offsetOutline(polygon(room),edges(polygon(room)).map(e=>{
+      const shell=network.find(w=>w.shell&&w.owners.some(o=>o.side===e.index)&&Math.abs(w.length-distance(e.a,e.b))<1e-6);
+      return shell?-distance(shell.a,shell.shell.a):['curtain','opening','window'].includes(faceKind(room,e.index))?-faceThickness(room,e.index)/24:0;
+    }))];
+    for(const wall of network){
+      if(wall.shell){pieces.push([wall.a,wall.b,wall.shell.b,wall.shell.a]);continue;}
       if(!['curtain','opening','window'].includes(wall.style.kind))continue;
       const face=curtainFace(wall,[room]);
       pieces.push([wall.a,wall.b,face.b,face.a]);
@@ -618,7 +623,7 @@
     return {rooms:moved,sliding,message};
   }
   // Split collinear sides at every endpoint; draw each resulting shared wall ONCE.
-  function wallNetwork(rooms,defaultThickness=6) {
+  function wallNetwork(rooms,defaultThickness=6,boundaries=[]) {
     const lines=[],corridors=corridorCuts(rooms.filter(r=>r.type==='corridor'));
     rooms.filter(r=>r.type!=='corridor').forEach(room=>edges(polygon(room)).forEach(({a,b,index})=> {
       let u=unit(sub(b,a));if(u.x<-.00001 || (Math.abs(u.x)<.00001&&u.y<0))u=mul(u,-1);
@@ -671,7 +676,33 @@
         }else walls.push({id:ownerKey+'@'+lo.toFixed(3)+':'+hi.toFixed(3),a:point(lo),b:point(hi),owners,adjacentRoomIds,source,style,length:hi-lo});
       }
     });
-    return walls;
+    return boundaryWallContacts(walls,rooms,boundaries);
+  }
+  // The site outline is a finished interior face, not another partition axis.
+  // Retain editable/door host geometry; suppress only parallel contact spans.
+  function boundaryWallContacts(walls,rooms,boundaries){
+    const sites=boundaries.filter(b=>!b.groupId&&b.points?.length>=3);
+    if(!sites.length)return walls;
+    return walls.flatMap(w=>{
+      if(!['wall','door'].includes(w.style.kind))return [w];
+      const u=unit(sub(w.b,w.a)),len=distance(w.a,w.b),half=(w.style.thickness||6)/24,contacts=[];
+      for(const site of sites)for(const e of edges(site.points)){
+        if(Math.abs(cross(u,unit(sub(e.b,e.a))))>1e-6)continue;
+        const n=inward(e,site.points),gap=dot(sub(w.a,e.a),n);
+        if(gap< -1e-6||gap>half+1e-6)continue;
+        if(!w.owners.every(o=>{const r=rooms.find(r=>r.id===o.roomId);return r&&dot(inward({a:o.a,b:o.b},polygon(r)),n)>.99999;}))continue;
+        const span=[e.a,e.b].map(p=>dot(sub(p,w.a),u)),lo=Math.max(0,Math.min(...span)),hi=Math.min(len,Math.max(...span));
+        if(hi-lo>1e-6)contacts.push({lo,hi,n,gap});
+      }
+      if(!contacts.length)return [w];
+      const stops=[...new Set([0,len,...contacts.flatMap(c=>[c.lo,c.hi])])].sort((a,b)=>a-b),result=[];
+      for(let i=1;i<stops.length;i++){
+        const lo=stops[i-1],hi=stops[i];if(hi-lo<1e-6)continue;
+        const a=add(w.a,mul(u,lo)),b=add(w.a,mul(u,hi)),c=contacts.find(c=>(lo+hi)/2>=c.lo&&(lo+hi)/2<=c.hi);
+        result.push({...w,id:w.id+':shell:'+i,a,b,length:hi-lo,...(c?{shell:{a:sub(a,mul(c.n,c.gap)),b:sub(b,mul(c.n,c.gap))}}:{})});
+      }
+      return result;
+    });
   }
   function shiftedEdge(points,side,offset) {
     if(!Number.isFinite(offset)||!Number.isInteger(side)||!points[side])return null;
@@ -855,17 +886,17 @@
     const strip=(a,b,half)=>{const u=unit(sub(b,a)),n=mul({x:-u.y,y:u.x},half);return [add(a,n),add(b,n),sub(b,n),sub(a,n)];};
     const pieces=[],openings=[];
     walls.forEach(w=>{
-      if(!['wall','door'].includes(w.style.kind))return;
+      if(w.shell||!['wall','door'].includes(w.style.kind))return;
       const half=Math.max(minThickness,w.style.thickness/12)/2;
       pieces.push(strip(w.a,w.b,half));
       // Curtain fronts sit on the exterior face. Carry adjoining partition
       // end caps to that same face, without moving the room or its doors.
       for(const [end,other] of [[w.a,w.b],[w.b,w.a]]){
         const outward=unit(sub(end,other));
-        for(const curtain of walls.filter(c=>['curtain','opening','window'].includes(c.style.kind))){
+        for(const curtain of walls.filter(c=>c.shell||['curtain','opening','window'].includes(c.style.kind))){
           if(!curtain.owners.some(c=>w.owners.some(o=>o.roomId===c.roomId)))continue;
           if(distance(end,closest(end,curtain.a,curtain.b))>.02)continue;
-          const face=curtainFace(curtain,entities),u=unit(sub(face.b,face.a));
+          const face=curtain.shell||curtainFace(curtain,entities),u=unit(sub(face.b,face.a));
           if(Math.abs(cross(outward,u))<.01)continue;
           const hit=intersectLines(end,outward,face.a,u);
           if(!hit)continue;
@@ -876,7 +907,7 @@
       const door=w.style.kind==='door'?doorOpening(w):null;
       if(door)openings.push(strip(door.a,door.b,half+.01));
     });
-    wallJoins(walls,minThickness).forEach(join=>pieces.push(join.points));
+    wallJoins(walls.filter(w=>!w.shell),minThickness).forEach(join=>pieces.push(join.points));
     // Hosted inserts cut the rendered mass only. The wall network and its
     // editable side geometry stay unchanged, even across shared-wall splits.
     hostedDoors.forEach(door=>openings.push(strip(door.a,door.b,Math.max(minThickness,door.thickness/12)/2+.01)));
@@ -935,8 +966,8 @@
     // Measure the visible colored footprint: curtain/open/window face extensions
     // are included; physical wall thickness and circulation are not usable area.
     // Door thresholds do not enlarge the room measurement.
-    const mass=wallMass(wallNetwork([room]),0,[],[room]);
-    const contours=unionOutline(roomFillContours(room),mass.pieces.concat(corridorCuts(corridors,boundaries)));
+    const mass=wallMass(wallNetwork([room],6,boundaries),0,[],[room]);
+    const contours=unionOutline(roomFillContours(room,[],boundaries),mass.pieces.concat(corridorCuts(corridors,boundaries)));
     const local=contours.flat().map(p=>rotate(sub(p,room),-room.angle));
     const width=local.length?Math.max(...local.map(p=>p.x))-Math.min(...local.map(p=>p.x)):0;
     const depth=local.length?Math.max(...local.map(p=>p.y))-Math.min(...local.map(p=>p.y)):0;

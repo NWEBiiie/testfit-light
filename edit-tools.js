@@ -289,5 +289,22 @@
       return {name:typeof entry?.name==='string'?entry.name:'JSON boundary '+(i+1),points};
     });
   }
-  return {selectRooms,extendWall,moveWall,remapDoors,cornerExclusion,setCornerExclusion,svgStraightPath,jsonBoundaryCandidates};
+  function parseColumnText(text){
+    if(typeof text!=='string'||!text.trim())throw Error('Paste at least one column: name, x, y, width, depth.');
+    const result=[];
+    text.split(/\r?\n/).forEach((line,i)=>{
+      if(!line.trim())return;
+      const values=line.split(/[,\t]/).map(v=>v.trim());
+      if(values.join(',').toLowerCase()==='name,x,y,width,depth')return;
+      const fail=()=>{throw Error('Line '+(i+1)+': use name, x, y, width, depth; coordinates must be numbers and sizes 0.1–100 ft.');};
+      if(values.length!==5||values.some(v=>!v)||values[0].length>32)fail();
+      const [name,...numbers]=values,[x,y,width,depth]=numbers.map(Number);
+      if(![x,y,width,depth].every(Number.isFinite)||Math.abs(x)>1e6||Math.abs(y)>1e6||width<.1||width>100||depth<.1||depth>100)fail();
+      result.push({name,x,y,width,depth});
+    });
+    if(!result.length)throw Error('Paste at least one column below the header.');
+    if(result.length>500)throw Error('Add at most 500 columns per batch.');
+    return result;
+  }
+  return {parseColumnText,selectRooms,extendWall,moveWall,remapDoors,cornerExclusion,setCornerExclusion,svgStraightPath,jsonBoundaryCandidates};
 });
