@@ -440,6 +440,31 @@
     return face;
   }
   function columnOutline(c){return [{x:c.x-c.width/2,y:c.y-c.depth/2},{x:c.x+c.width/2,y:c.y-c.depth/2},{x:c.x+c.width/2,y:c.y+c.depth/2},{x:c.x-c.width/2,y:c.y+c.depth/2}];}
+  // The site polygon is the INTERIOR shell face. All shell mass grows outward.
+  function exteriorWallMass(boundaries,thickness=12,doors=[],portals=[]){
+    const t=Number(thickness)/12,pieces=[],openings=[],centerlines=[];
+    if(!Number.isFinite(t)||t<=0)return {pieces,openings,centerlines};
+    for(const site of boundaries.filter(b=>!b.groupId)){
+      const poly=site.points,es=edges(poly),sign=es.reduce((sum,e)=>sum+cross(e.a,e.b),0)>0?1:-1;
+      for(const e of es){
+        const u=unit(sub(e.b,e.a)),out=mul(inward(e,poly),-1),len=distance(e.a,e.b),holes=[];
+        pieces.push([e.a,e.b,add(e.b,mul(out,t)),add(e.a,mul(out,t))]);
+        const prev=es[(e.index+es.length-1)%es.length],pu=unit(sub(prev.b,prev.a)),po=mul(inward(prev,poly),-1);
+        if(cross(pu,u)*sign>EPS){const a=add(e.a,mul(po,t)),b=add(e.a,mul(out,t)),m=intersectLines(a,pu,b,u);pieces.push(m&&distance(m,e.a)<=t*8?[e.a,a,m,b]:[e.a,a,b]);}
+        if(!facadeEdge(site,e)){
+          for(const d of doors){if(Math.abs(cross(u,d.u))>1e-5||distance(d.center,closest(d.center,e.a,e.b))>Math.max(.5,(d.thickness||6)/24+.01))continue;const at=dot(sub(d.center,e.a),u);holes.push([Math.max(0,at-d.width/2),Math.min(len,at+d.width/2)]);}
+          for(const p of portals){if(distance(p,closest(p,e.a,e.b))>.01)continue;const at=dot(sub(p,e.a),u),half=(p.clearWidth||3)/2;holes.push([Math.max(0,at-half),Math.min(len,at+half)]);}
+        }
+        for(const [lo,hi] of holes.filter(([a,b])=>b>a)){const a=add(e.a,mul(u,lo)),b=add(e.a,mul(u,hi));openings.push([sub(a,mul(out,.01)),sub(b,mul(out,.01)),add(b,mul(out,t+.01)),add(a,mul(out,t+.01))]);}
+        const centerA=add(e.a,mul(out,t/2)),next=es[(e.index+1)%es.length];
+        const corner=(adj,p)=>intersectLines(centerA,u,add(p,mul(inward(adj,poly),-t/2)),sub(adj.b,adj.a))||add(p,mul(out,t/2));
+        const first=corner(prev,e.a),last=corner(next,e.b),end=dot(sub(last,centerA),u);let start=dot(sub(first,centerA),u);
+        for(const [lo,hi] of holes.filter(([a,b])=>b>a).sort((a,b)=>a[0]-b[0])){if(lo>start)centerlines.push({a:add(centerA,mul(u,start)),b:add(centerA,mul(u,lo))});start=Math.max(start,hi);}
+        if(start<end)centerlines.push({a:add(centerA,mul(u,start)),b:last});
+      }
+    }
+    return {pieces,openings,centerlines};
+  }
   function columnSnapTargets(options){return options.columnSnap===false||options.columnsEnabled===false?[]:(options.columns||[]).filter(c=>c.enabled!==false).flatMap(c=>{const p=columnOutline(c),center=options.columnSnapMode==='center';return edges(p).map(e=>{const n=inward(e,p),delta=center?mul(n,dot(sub(c,e.a),n)):{x:0,y:0};return {edge:{...e,a:add(e.a,delta),b:add(e.b,delta)},normal:mul(n,-1),kind:'column',thickness:0,center};});});}
   function snapSelection(rooms,others,boundaries,options={}) {
     const margin=options.margin??2,matches=[];
@@ -1001,5 +1026,5 @@
     if(Math.abs(measure(size)-target)>.001)throw Error('That hatch size cannot be reached with the current outline and corridor cutouts.');
     return {[axis]:size};
   }
-  return {columnSnapTargets,columnOutline,hatchMetrics,hatchSizePatch,roomFillContours,curtainFace,snapCorridorSegment,interiorOutline,offsetOutline,EPS,add,sub,mul,dot,cross,length,distance,unit,rotate,normalize,nearestAngle,edges,area,centroid,baseOutline,polygon,closest,inside,contains,overlaps,simple,inward,fitInside,alignToEdge,cornerFits,validBoundaryFit,validPlacement,settle,moveSelection,wallNetwork,shiftedEdge,wallReference,withManualOutline,shiftWall,snapWallDrag,sideLengthMove,doorOpening,wallJoins,wallMass,corridorPoint,corridorPolygon,validCorridor,corridorCuts,roomContours,contourArea,insideContours,contoursOverlap,secondarySnap,snapSelection,alignGroupBottom,alignRoomEdges,unionOutline,unionBoundarySegments,contactEdges};
+  return {exteriorWallMass,columnSnapTargets,columnOutline,hatchMetrics,hatchSizePatch,roomFillContours,curtainFace,snapCorridorSegment,interiorOutline,offsetOutline,EPS,add,sub,mul,dot,cross,length,distance,unit,rotate,normalize,nearestAngle,edges,area,centroid,baseOutline,polygon,closest,inside,contains,overlaps,simple,inward,fitInside,alignToEdge,cornerFits,validBoundaryFit,validPlacement,settle,moveSelection,wallNetwork,shiftedEdge,wallReference,withManualOutline,shiftWall,snapWallDrag,sideLengthMove,doorOpening,wallJoins,wallMass,corridorPoint,corridorPolygon,validCorridor,corridorCuts,roomContours,contourArea,insideContours,contoursOverlap,secondarySnap,snapSelection,alignGroupBottom,alignRoomEdges,unionOutline,unionBoundarySegments,contactEdges};
 });

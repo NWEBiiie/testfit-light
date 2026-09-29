@@ -8,7 +8,7 @@
   let isolatedRoom=null,wallExtension=null,selectedCorridorSide=null;
   let completedRoomClick=null,handledDoubleClickUntil=0;
   let walls=[],doorViews=[],undo=[],redo=[],view={x:32,y:22,zoom:10},size={width:900,height:600};
-  const defaultModel=()=>({schema:'testfit-light',version:7,nextId:1,revision:1,rooms:[],groups:[],boundaries:[],corridors:[],doors:[],columns:[],portals:[],settings:{wallStyle:'poche',thickness:6,boundarySnap:true,roomSnap:true,columnsEnabled:true,columnSnap:true,columnSnapMode:'face',margin:2}});
+  const defaultModel=()=>({schema:'testfit-light',version:7,nextId:1,revision:1,rooms:[],groups:[],boundaries:[],corridors:[],doors:[],columns:[],portals:[],settings:{wallStyle:'poche',thickness:6,exteriorThickness:12,boundarySnap:true,roomSnap:true,columnsEnabled:true,columnSnap:true,columnSnapMode:'face',margin:2}});
   const snapOptions=()=>({...model.settings,columns:model.settings.columnsEnabled===false?[]:(model.columns||[])});
   const getRoom=id=>model.rooms.find(r=>r.id===Number(id));
   const getCorridor=id=>model.corridors.find(c=>c.id===Number(id));
@@ -30,6 +30,7 @@
   function sample(variant){
     variant=variant||window.location?.search?.match(/[?&]layout=(advice1|advice2|advice3|previous|points|saved|boundary)(?:&|$)/)?.[1]||'advice1';
     model=H.migrate(window.LightSeptemberStudies?.models[variant]?copy(window.LightSeptemberStudies.models[variant]):variant==='boundary'?copy(window.LightBoundaryStudy):window.createLightPhotoProject(G,variant));
+    model.settings.exteriorThickness??=12;
     const site=model.boundaries.find(b=>!b.groupId);if($('#boundaryPoints')&&site){$('#boundaryPoints').value=JSON.stringify({points:site.points},null,2);clearBoundaryImport();}
     activeCorridor=null;selected=new Set(model.rooms.length?[model.rooms[0].id]:[]);selectedWall=selectedDoor=null;activeGroup=null;isolatedRoom=wallExtension=selectedCorridorSide=null;doorPlacement=drawing=stoppedDrawing=drag=preview=wallPreview=null;
     render();fit();status(model.reference.title+' · Save each option before editing.');
@@ -62,6 +63,12 @@
       outline=`<path d="${d}" fill="none" stroke="#000" stroke-width="1.2" stroke-linecap="round"/>`;
     }
     return `<defs>${holes}<pattern id="wall-hatch" width="7" height="7" patternUnits="userSpaceOnUse"><rect width="7" height="7" fill="#fff"/><path d="M-2 2L2 -2 M0 7L7 0 M5 9L9 5" stroke="#777" stroke-width=".7"/></pattern></defs><g pointer-events="none"><path class="wall-solid" d="${solidPath(mass.pieces)}" fill="${style==='black'?'#000000':style==='hatch'?'url(#wall-hatch)':'#ffffff'}" fill-rule="nonzero" ${openings.length?'mask="url(#wall-door-cuts)"':''}/>${outline}</g>`;
+  }
+  function drawExteriorShell(){
+    const shell=G.exteriorWallMass(model.boundaries,model.settings.exteriorThickness??12,doorViews,model.portals||[]),style=model.settings.wallStyle;
+    const solid=polys=>polys.map(p=>path(G.edges(p).reduce((sum,e)=>sum+G.cross(e.a,e.b),0)<0?[...p].reverse():p)).join(' ');
+    const outline=G.unionBoundarySegments(shell.pieces,shell.openings).map(e=>line(e.a,e.b,'stroke="#000" stroke-width="1.2"')).join('');
+    return `<defs><mask id="exterior-cuts" maskUnits="userSpaceOnUse" x="0" y="0" width="${size.width}" height="${size.height}" style="mask-type:luminance"><rect width="100%" height="100%" fill="white"/><path d="${solid(shell.openings)}" fill="black"/></mask></defs><g class="exterior-shell" pointer-events="none"><path d="${solid(shell.pieces)}" fill="${style==='black'?'#000':style==='hatch'?'url(#wall-hatch)':'#fff'}" fill-rule="nonzero" mask="url(#exterior-cuts)"/>${outline}</g>`;
   }
   function drawWall(wall){
     const originalWall=wall,spec=wall.style,shared=wall.owners.length>1,selectedHere=wall.id===selectedWall;
@@ -244,6 +251,7 @@
       }
     });
     svg+=drawWallMass(walls);
+    svg+=drawExteriorShell();
     walls.forEach(w=>svg+=drawWall(w));
     if(['wall','corridor-edge'].includes(drag?.kind)&&drag.result?.snapGuide){const guide=drag.result.snapGuide;svg+=line(guide.a,guide.b,'stroke="#1984b5" stroke-width="2" stroke-dasharray="6 4" pointer-events="none"');}
     const selectedEdge=walls.find(w=>w.id===selectedWall);
@@ -874,8 +882,8 @@
     if(!groupValid(model.rooms,boundaries,model.corridors)){renderExclusionControls();status('That exclusion intersects a room or corridor. Move those spaces first; nothing was changed.');return;}
     checkpoint();model.boundaries=boundaries;render();status(next.exclusion.enabled?'Lower-right exclusion: '+fmt(next.exclusion.width)+' × '+fmt(next.exclusion.height)+' ft.':'Exclusion off. The full lower-right area is available.');
   }
-  function syncSettings(){$('#wallStyle').value=model.settings.wallStyle;$('#defaultThickness').value=model.settings.thickness;$('#boundarySnap').checked=model.settings.boundarySnap;$('#roomSnap').checked=model.settings.roomSnap;$('#snapDistance').value=model.settings.margin;}
-  [['#defaultThickness','thickness'],['#boundarySnap','boundarySnap'],['#roomSnap','roomSnap'],['#snapDistance','margin']].forEach(([id,key])=>$(id).onchange=e=>{const value=e.target.type==='checkbox'?e.target.checked:Number(e.target.value);if(typeof value==='number'&&(!Number.isFinite(value)||value<0||(key==='thickness'&&(value<1||value>36)))){syncSettings();return;}checkpoint();model.settings[key]=value;render();});
+  function syncSettings(){$('#wallStyle').value=model.settings.wallStyle;$('#defaultThickness').value=model.settings.thickness;$('#exteriorThickness').value=model.settings.exteriorThickness??12;$('#boundarySnap').checked=model.settings.boundarySnap;$('#roomSnap').checked=model.settings.roomSnap;$('#snapDistance').value=model.settings.margin;}
+  [['#exteriorThickness','exteriorThickness'],['#defaultThickness','thickness'],['#boundarySnap','boundarySnap'],['#roomSnap','roomSnap'],['#snapDistance','margin']].forEach(([id,key])=>$(id).onchange=e=>{const value=e.target.type==='checkbox'?e.target.checked:Number(e.target.value);if(typeof value==='number'&&(!Number.isFinite(value)||value<0||(['thickness','exteriorThickness'].includes(key)&&(value<1||value>36)))){syncSettings();return;}checkpoint();model.settings[key]=value;render();});
   $('#wallStyle').onchange=e=>{checkpoint();model.settings.wallStyle=e.target.value;draw();};
   $('#corridorWidth').closest?.('label')?.insertAdjacentHTML('beforebegin','<label>New route type<select id="corridorPurpose"><option value="patient">Patient care / OR patient access · 8 ft</option><option value="staff">Staff / service access · 6 ft</option></select></label>');
   if($('#corridorPurpose'))$('#corridorPurpose').onchange=()=>{$('#corridorWidth').value=$('#corridorPurpose').value==='staff'?6:8;};
@@ -886,7 +894,7 @@
   $('#save').onclick=()=>{download('testfit-light.json',JSON.stringify(model,null,2),'application/json');status('Editable project saved.');};$('#open').onclick=()=>$('#file').click();
   function validateFile(value){
     if(value?.schema!=='testfit-light'||!Array.isArray(value.rooms)||!Array.isArray(value.groups)||!Array.isArray(value.boundaries)||value.rooms.length>300||value.groups.length>100||value.boundaries.length>100)throw Error('Choose a TestFit Light project (up to 300 rooms and 100 boundaries).');
-    const next=defaultModel(),ids=new Set();next.settings={...next.settings,...value.settings};next.settings.thickness=Math.max(1,Math.min(36,Number(next.settings.thickness)||6));next.settings.margin=Math.max(.1,Math.min(10,Number(next.settings.margin)||2));delete next.settings.grid;next.settings.wallStyle=['black','poche','hatch'].includes(next.settings.wallStyle)?next.settings.wallStyle:'poche';
+    const next=defaultModel(),ids=new Set();next.settings={...next.settings,...value.settings};next.settings.thickness=Math.max(1,Math.min(36,Number(next.settings.thickness)||6));next.settings.exteriorThickness=Math.max(1,Math.min(36,Number(next.settings.exteriorThickness)||12));next.settings.margin=Math.max(.1,Math.min(10,Number(next.settings.margin)||2));delete next.settings.grid;next.settings.wallStyle=['black','poche','hatch'].includes(next.settings.wallStyle)?next.settings.wallStyle:'poche';
     if(value.reference&&typeof value.reference==='object'){
       next.reference={title:String(value.reference.title||'Photo-based study').slice(0,96),note:String(value.reference.note||'Approximate reference plan.').slice(0,700)};
       if(['advice1','advice2','advice3','previous','points','saved','boundary','west','east','split','client1','client2','client3','client4','client5'].includes(value.reference.variant))next.reference.variant=value.reference.variant;
