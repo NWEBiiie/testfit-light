@@ -31,11 +31,12 @@
   }
   function exportDxf(model,options={}){
     const items=curves(model,options),layers=['0',...new Set(items.map(e=>e.layer))],out=[];
-    const pair=(code,value)=>{if(typeof value==='number'){if(!Number.isFinite(value))throw new Error('Invalid CAD coordinate');value=Number(value.toFixed(9));}out.push(String(code),String(value));};
+    let handle=16;
+    const pair=(code,value)=>{if(typeof value==='number'){if(!Number.isFinite(value))throw new Error('Invalid CAD coordinate');value=Number(value.toFixed(9));}out.push(String(code),String(value));if(code===0&&['LTYPE','LAYER','LINE','ARC'].includes(value))out.push('5',(handle++).toString(16).toUpperCase());};
     pair(0,'SECTION');pair(2,'HEADER');pair(9,'$ACADVER');pair(1,'AC1015');pair(9,'$INSUNITS');pair(70,2);pair(9,'$MEASUREMENT');pair(70,0);pair(9,'$LUNITS');pair(70,2);pair(9,'$LUPREC');pair(70,6);pair(0,'ENDSEC');
     pair(999,'TestFit Light: wall centerline curves; 1 unit = 1 foot; '+(options.preserveXY?'saved X/Y preserved':'X unchanged; Y negated to match screen orientation')+'. Schematic, not construction documents.');
-    pair(0,'SECTION');pair(2,'TABLES');pair(0,'TABLE');pair(2,'LTYPE');pair(70,1);pair(0,'LTYPE');pair(100,'AcDbSymbolTableRecord');pair(100,'AcDbLinetypeTableRecord');pair(2,'CONTINUOUS');pair(70,0);pair(3,'Solid line');pair(72,65);pair(73,0);pair(40,0);pair(0,'ENDTAB');
-    pair(0,'TABLE');pair(2,'LAYER');pair(70,layers.length);
+    pair(0,'SECTION');pair(2,'TABLES');pair(0,'TABLE');pair(2,'LTYPE');pair(5,'1');pair(100,'AcDbSymbolTable');pair(70,1);pair(0,'LTYPE');pair(100,'AcDbSymbolTableRecord');pair(100,'AcDbLinetypeTableRecord');pair(2,'CONTINUOUS');pair(70,0);pair(3,'Solid line');pair(72,65);pair(73,0);pair(40,0);pair(0,'ENDTAB');
+    pair(0,'TABLE');pair(2,'LAYER');pair(5,'2');pair(100,'AcDbSymbolTable');pair(70,layers.length);
     for(const name of layers){pair(0,'LAYER');pair(100,'AcDbSymbolTableRecord');pair(100,'AcDbLayerTableRecord');pair(2,name);pair(70,0);pair(62,7);pair(6,'CONTINUOUS');}pair(0,'ENDTAB');pair(0,'ENDSEC');
     pair(0,'SECTION');pair(2,'ENTITIES');
     const xyz=(p,code=10)=>{pair(code,p.x);pair(code+10,p.y);pair(code+20,0);};
