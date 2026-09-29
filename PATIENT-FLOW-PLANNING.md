@@ -1,40 +1,41 @@
-# Three 400-sf ORs · direct nursing observation · no PT
+# Current default: west ORs and twelve universal bays
 
-This revision removes PT/mobility, provides three smaller ORs at **400 sf clear each**, and makes every dashed PACU/pre-op curtain front directly visible from an open side of nursing. The exact boundary, lower arrival, upper discharge and column controls remain unchanged.
+This patient-first revision is the default. The previous ten-bay default is available under **Previous default · ten-bay observation**. Options 2 and 3 are unchanged earlier studies; the original saved layout also remains available.
 
-## Three options
+## Requested program
 
-| Option | Nursing position | Waiting/reception | Longest tested opening-to-curtain line |
-| --- | --- | ---: | ---: |
-| 1 — Central observation (default) | Between clean and soiled support | 470 sf | 22.78 ft |
-| 2 — Arrival-side nursing | Toward lower arrival end | 500 sf | 27.63 ft |
-| 3 — OR-side nursing | Toward upper OR end | 450 sf | 29.28 ft |
+- Three separate ORs on the west/left, 400 sf clear each. They are now 25 × 16 ft clear, not the former 20 × 20 ft squares.
+- An 8-ft patient spine alongside the ORs, on the left of the pre-op/PACU zone. It is to the right of the OR rooms, not outside their west walls.
+- Twelve universal pre-op/PACU bays, 120 sf clear each (15 × 8 ft). They remain interchangeable bays rather than twelve pre-op plus twelve PACU rooms.
+- Two dedicated patient toilets in the pre-op/PACU zone, approximately 83.38 sf each, with doors directly onto the observation aisle. They are not OR toilets.
+- A 240-sf nurse station, open toward the observation aisle. Its projecting north/south openings have direct geometric views to all twelve curtain fronts.
+- Separate Consult (110 sf), Reception (70 sf) and Office (70 sf).
+- Waiting/public circulation approximately 489.29 sf. Patients arrive at the lower recess and walk through this public space to the clinical circulation; it is not all available for seating.
+- A dedicated 300-sf staff lounge plus separate 100-sf men's and women's locker rooms. These replace the former combined 265-sf staff block.
+- No PT/mobility room.
 
-These are variations of one two-bank observation arrangement. The original saved layout remains available unchanged; previous two-OR builders remain archived locally.
+## Routes and visibility
 
-## Geometry and visibility
+The lower boundary recess remains patient arrival; the upper recess remains discharge. The west patient spine connects the waiting area, PACU transfer route, OR doors and upper discharge connector. The observation aisle remains at least 8.33 ft beside the projecting nursing station. The staff utility access is only 3 ft wide and is not a patient/stretcher route.
 
-- Each OR measures 20 × 20 ft inside finished walls: 400 sf hatched area, with patient-side and processing-side doors.
-- Ten 120-sf universal bays form two banks. All curtains face inward toward nursing rather than another bay's back wall.
-- Nursing is 240 sf, with both opposite sides set to open access, not glass, mullions, curtains or solid walls.
-- The 8-ft west and 8.5-ft east observation aisles connect at both ends, removing previous bay-aisle dead ends.
-- Tests trace five points across every physical curtain face to its corresponding open nurse face. Lines stay in clear corridor space and do not cross another room or solid wall.
-- Distances above use the nearest available point along each nurse opening, not one fixed seated observer. This verifies opening-to-opening geometry, not patient visibility, continuous surveillance or staffing adequacy. Furniture, bed orientation, curtains, doors, carts and future columns can obstruct real views. Recheck after editing.
+Tests sample five points across each of twelve physical curtain faces, using observation points on the usable projecting north/south nurse openings. All sixty lines remain in the aisle and avoid other room/wall envelopes. The longest sampled line is 27.34 ft. This is opening-to-curtain geometry, not continuous visibility from one seated position or a staffing guarantee. Curtains, carts, doors, furniture and bed orientation still require a real visibility study.
 
-## Access and compromises
+## Remaining design issues
 
-Bottom arrival retains the exact 7.667-ft shell width; upper discharge retains 6.833 ft. Both widen to 8-ft interior routes. Stretcher movement, door clearances and accessibility remain unverified. No PT/mobility room is included.
+This is a schematic arrangement, not a construction or clinical approval plan.
 
-Decontamination, assembly and sterile-storage net areas are retained from the previous saved scheme. Meds and anesthesia remain 170 sf each in the nursing-support core. The smaller ORs are user-requested study targets; equipment, anesthesia work zones and procedural suitability are not verified.
+- Clean/dirty transport is not segregated: ORs, processing and discharge still share the patient spine and transfer connections. ORs currently have a single patient-side double-door opening; a separate clean-side OR access system is not resolved.
+- The new rectangular ORs and 15 × 8-ft bays need procedure/equipment, bed, staff and transfer-clearance checks.
+- Waiting has an approximately 8-ft-wide public route. Seating must not obstruct it; no 30-seat capacity is established.
+- Reception and office are small enclosed planning rooms, not furnished layouts.
+- Locker fixture counts, staff toilets/showers, wheelchair clearances and staff utility access need further design. The two shown patient toilets do not establish staff toilet provision.
+- Decontamination and assembly retain their previous net areas; sterile/equipment storage increases to approximately 414.37 sf. Sterile and non-sterile janitor closets are not separately resolved in this revision.
+- Receiving and equipment storage are consolidated into a 100-sf exterior-access block; equipment also shares sterile storage. Dedicated robot/stretcher/nourishment storage remains unresolved.
+- Engineering/service rooms use exterior doors where shown. IT has internal staff access. MEP capacities and service clearances are not verified.
+- The shell entrance and discharge recesses remain narrower than the interior routes (7.667 ft and 6.833 ft). Access, egress and jurisdictional requirements require professional review.
 
-Staff lounge/lockers/toilets are consolidated into a **265-sf planning block** with exterior and OR-transfer access; separate locker/toilet layouts are not designed. Consult/office/records share **110 sf**. Equipment/case staging is approximately **72.69 sf**, down from 180 sf; additional equipment storage is only conceptually shared with sterile storage. Dedicated robot storage is not proven. These are explicit compromises, not equivalent replacements for the old room program.
+## Preservation and checks
 
-Engineering has exterior-only doors. Mechanical/HVAC/boiler share 150 sf; electrical/emergency/RO/medical gas are approximately 83.33 sf each. Capacity and service clearances remain unverified. Receiving and bio-waste servicing need review. Clean/dirty routes and public/restricted separation remain unresolved; the discharge connection joins surgical circulation. No clinical, fire, egress or construction approval is implied.
+The exact supplied boundary coordinates, non-bounding columns, import/edit controls, SVG and CAD wall-centerline DXF exports remain available. No surveyed column locations are assumed.
 
-## Columns and saved work
-
-Columns remain separate reference objects with center X/Y, width/depth, per-column/global enable and independently toggleable face snapping. They never bound rooms, clip hatch areas or block dragging. Save/Open and Undo/Redo retain them. No surveyed column positions are assumed.
-
-## Verification
-
-Current builder: `scripts/build-three-or.cjs`. Regression test: `tests/three-or.cjs`. Checks cover exact boundary, three 400-sf ORs, ten 120-sf bays, no PT, open 240-sf nursing, curtain sightlines, outer-wall containment, room/corridor non-overlap, accessible hosted doors and three distinct options. These are schematic geometric checks, not clinical approval.
+Builder: `scripts/build-patient-revision.cjs`. Test: `tests/patient-revision.cjs`. Checks cover room/bay counts, clear areas, outer-wall containment, room/corridor overlap, door access, curtain sightlines and preservation of earlier studies. Import round-trip, door/column regressions and CAD export tests also run. Original studies retain their own earlier assumptions.
