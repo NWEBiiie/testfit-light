@@ -27,8 +27,9 @@
   function checkpoint(){undo.push(copy(model));if(undo.length>60)undo.shift();redo=[];}
   function newRoom(name,width,depth,shape='rect',angle=0){return {id:model.nextId++,name,width,depth,shape,angle,x:0,y:0,color:palette[model.rooms.length%palette.length],groupId:null,locked:false,walls:Array.from({length:shape==='l'?6:4},()=>({kind:'wall',thickness:model.settings.thickness,revision:0,segments:[]}))};}
   function sample(variant){
-    variant=variant||window.location?.search?.match(/[?&]layout=(saved|boundary)(?:&|$)/)?.[1]||'saved';
-    model=H.migrate(variant==='boundary'?copy(window.LightBoundaryStudy):window.createLightPhotoProject(G,variant));
+    variant=variant||window.location?.search?.match(/[?&]layout=(advice1|advice2|advice3|points|saved|boundary)(?:&|$)/)?.[1]||'advice1';
+    model=H.migrate(window.LightSeptemberStudies?.models[variant]?copy(window.LightSeptemberStudies.models[variant]):variant==='boundary'?copy(window.LightBoundaryStudy):window.createLightPhotoProject(G,variant));
+    const site=model.boundaries.find(b=>!b.groupId);if($('#boundaryPoints')&&site){$('#boundaryPoints').value=JSON.stringify({points:site.points},null,2);clearBoundaryImport();}
     activeCorridor=null;selected=new Set(model.rooms.length?[model.rooms[0].id]:[]);selectedWall=selectedDoor=null;activeGroup=null;isolatedRoom=wallExtension=selectedCorridorSide=null;doorPlacement=drawing=stoppedDrawing=drag=preview=wallPreview=null;
     render();fit();status(model.reference.title+' · Save each option before editing.');
   }
@@ -269,9 +270,16 @@
     $('#wallCount').textContent=walls.filter(w=>w.owners.length>1).length+' shared wall segments';
   }
   function render(){$('#addDoor').textContent=doorPlacement?'Stop adding doors':'＋ Add door';$('#addDoor').classList.toggle('active',!!doorPlacement);$('#addDoor').setAttribute('aria-pressed',String(!!doorPlacement));renderLists();draw();renderInspector();$('#undo').disabled=!undo.length;$('#redo').disabled=!redo.length;$('#finish').hidden=!drawing||!['poly','corridor'].includes(drawing.type);$('#finish').textContent=drawing?.type==='corridor'?'Stop drawing':'Finish boundary';$('#pathDrawingBar').hidden=drawing?.type!=='corridor';$('#corridorDirection').disabled=!!drawing;$('#pathDrawingHint').textContent=drawing?.drawMode==='free'?'Free angle · click end, then stop.':'90° corners · click end, then stop.';$('#resumeDrawing').hidden=!stoppedDrawing;$('#discardDraft').hidden=!stoppedDrawing;$('#cancel').hidden=!drawing;$('#undoPoint').hidden=!drawing||!['poly','corridor'].includes(drawing.type);}
+  function renderStudyAdvice(){
+    const panel=$('#studyAdvice'),study=window.LightSeptemberStudies,note=study?.notes[model.reference?.variant];
+    if(!panel)return;panel.hidden=!note;if(!note){panel.innerHTML='';return;}
+    const categoryNames={plant:'MEP / chase',admin:'Administration',patient:'Patient care',support:'Support',public:'Public space',treatment:'Diagnostic / treatment'};
+    panel.innerHTML=`<p class="study-summary">${esc(note.description)}</p><p class="hint">Preset program: 2 × 600-sf ORs · 10 × 120-sf bays · 150-sf PT · 170-sf meds · 8-ft clear corridors.</p><p class="notice warning">${esc(note.tradeoff)} Waiting/reception is reduced to 500 sf; engineering and support functions are consolidated. Capacity is unverified.</p><details><summary>Compare the three options</summary><p class="hint">Approximate threshold-to-threshold routes along the drawn corridor centerlines, to the nearest OR patient door. These are preset measurements, not live results after editing or evidence of clinical performance.</p>${Object.values(study.notes).map(n=>`<div class="study-comparison"><strong>${esc(n.title)}</strong><span>Nursing → OR: ~${n.nurseRoute} ft<br>PT → OR: ~${n.ptRoute} ft</span></div>`).join('')}</details><details><summary>Client room colors</summary><div class="study-legend">${Object.entries(study.colors).map(([key,color])=>`<span><i style="background:${color}"></i>${categoryNames[key]}</span>`).join('')}</div></details><p class="hint">Design notes describe the starting preset; geometry checks do not establish clinical or code compliance.</p>`;
+  }
   function renderLists(){
-    if($('#layoutChoice'))$('#layoutChoice').value=model.reference?.variant||'west';
+    if($('#layoutChoice'))$('#layoutChoice').value=model.reference?.variant||'';
     if($('#layoutSummary'))$('#layoutSummary').textContent=model.reference?.title||'Custom plan';
+    renderStudyAdvice();
     $('#projectNote').textContent=model.reference?.note||'';$('#projectNote').hidden=!model.reference;
     $('#roomCount').textContent=model.rooms.length+' · '+fmt(model.rooms.reduce((n,r)=>n+displayArea(r),0))+' sf';
     $('#roomList').innerHTML=model.rooms.length?model.rooms.map(r=>`<div class="room-row ${selected.has(r.id)?'active':''}"><input type="checkbox" data-pick="${r.id}" aria-label="Select ${esc(r.name)}" ${selected.has(r.id)?'checked':''}><i class="swatch" style="background:${r.color}"></i><button data-room="${r.id}"><div>${esc(r.name)}<span>${fmt(displayArea(r))} sf · ${corridorLoss(r)>.01?"cut by corridor":hatchMetrics(r).width.toFixed(2)+" × "+hatchMetrics(r).depth.toFixed(2)+" ft clear"}</span></div>${r.locked?'⌑':''}</button></div>`).join(''):'<p class="hint">No rooms yet. Add one above.</p>';
@@ -739,6 +747,8 @@
     const site=model.boundaries.find(b=>!b.groupId),panel=$('#exclusionControls');if(!panel)return;
     if(model.reference?.variant==='boundary'){panel.innerHTML='<h3>Boundary dimensions · feet</h3><p class="hint">Edge numbers match the plan. Photo labels are not a claim that the entire outline closes exactly. ≈ means unresolved.</p>'+model.boundaries[0].points.map((a,i)=>{const b=model.boundaries[0].points[(i+1)%model.boundaries[0].points.length];return '<p class="hint"><strong>E'+(i+1)+': '+esc(model.boundaryLabels?.[i]||'Verify')+'</strong><br>Drawn length: '+fmt(G.distance(a,b))+' ft</p>';}).join('');return;}
     if(!site){panel.innerHTML='<p class="hint">Draw a site boundary to add the lower-right exclusion.</p>';return;}
+    const literal=window.LightSeptemberStudies?.sourcePoints;
+    if(literal&&JSON.stringify(site.points)===JSON.stringify(literal)){panel.innerHTML='<p class="hint">Exact supplied point boundary. Its small edge recesses are part of your outline, not an inferred 50 × 40-ft corner exclusion. Use the X / Y point editor below to change them.</p>';return;}
     const e=E.cornerExclusion(site);
     panel.innerHTML=`<label class="check"><input id="exclusionEnabled" type="checkbox" ${e.enabled?'checked':''}> Exclude lower-right corner</label><div class="two">${input('exclusionWidth','Width · ft',Number(e.width.toFixed(3)),'type="number" min="0.25" max="500" step="0.25"')}${input('exclusionHeight','Height · ft',Number(e.height.toFixed(3)),'type="number" min="0.25" max="500" step="0.25"')}</div><button id="applyExclusion" class="wide">Apply exclusion size</button><button id="resetExclusion" class="text-button">Use default 50 × 40 ft</button><p class="hint">Anchored at the lower-right outer corner. Off restores the full shell. Conflicting changes are blocked; rooms are never deleted or moved.</p>`;
     $('#exclusionEnabled').onchange=ev=>editExclusion({enabled:ev.target.checked});
@@ -849,7 +859,7 @@
     const next=defaultModel(),ids=new Set();next.settings={...next.settings,...value.settings};next.settings.thickness=Math.max(1,Math.min(36,Number(next.settings.thickness)||6));next.settings.margin=Math.max(.1,Math.min(10,Number(next.settings.margin)||2));delete next.settings.grid;next.settings.wallStyle=['black','poche','hatch'].includes(next.settings.wallStyle)?next.settings.wallStyle:'poche';
     if(value.reference&&typeof value.reference==='object'){
       next.reference={title:String(value.reference.title||'Photo-based study').slice(0,96),note:String(value.reference.note||'Approximate reference plan.').slice(0,700)};
-      if(['saved','boundary','west','east','split','client1','client2','client3','client4','client5'].includes(value.reference.variant))next.reference.variant=value.reference.variant;
+      if(['advice1','advice2','advice3','points','saved','boundary','west','east','split','client1','client2','client3','client4','client5'].includes(value.reference.variant))next.reference.variant=value.reference.variant;
       if(value.reference.dimensions)next.reference.dimensions=Object.fromEntries(['overallWidth','leftDepth','topLength','rightReturn'].filter(key=>Number.isFinite(value.reference.dimensions[key])).map(key=>[key,value.reference.dimensions[key]]));
       const exclusion=value.reference.excludedCorner;
       if(exclusion&&['x','y','width','height','area'].every(key=>Number.isFinite(exclusion[key])))next.reference.excludedCorner=Object.fromEntries(['x','y','width','height','area'].map(key=>[key,exclusion[key]]));
