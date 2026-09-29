@@ -255,26 +255,31 @@
     return simple(poly)&&boundaries.filter(b=>!b.groupId).every(b=>contains(poly,b.points));
   }
   function snapCorridorSegment(c,reference,rooms,boundaries,options={}){
-    if(options.roomSnap===false||c.outline)return null;
+    if(options.roomSnap===false&&!columnSnapTargets(options).length)return null;
     const count=c.points.length,poly=polygon(c),sides=edges(poly),margin=options.margin??2;
-    const indices=reference.end!==undefined?[reference.end===0?2*count-1:count-1]:[reference.segment,2*count-2-reference.segment];
+    const indices=c.outline?[reference.outlineSide]:reference.end!==undefined?[reference.end===0?2*count-1:count-1]:[reference.segment,2*count-2-reference.segment];
     const choices=[];
     for(const index of indices){
       const edge=sides[index];if(!edge)continue;
       const u=unit(sub(edge.b,edge.a)),normal=inward(edge,poly);
-      for(const room of rooms){const rp=polygon(room);
-        for(const wall of edges(rp)){
-          const outward=mul(inward(wall,rp),-1);
-          if(Math.abs(cross(u,unit(sub(wall.b,wall.a))))>.0001||dot(outward,normal)<.999)continue;
-          const half=faceThickness(room,wall.index)/24,a=add(wall.a,mul(outward,half)),b=add(wall.b,mul(outward,half));
+      const targets=columnSnapTargets(options);
+      if(options.roomSnap!==false)for(const room of rooms){const rp=polygon(room);
+        for(const wall of edges(rp)){const outward=mul(inward(wall,rp),-1),half=faceThickness(room,wall.index)/24;
+          targets.push({edge:{a:add(wall.a,mul(outward,half)),b:add(wall.b,mul(outward,half))},normal:outward,kind:'neighbor'});
+        }
+      }
+      for(const target of targets){
+          const {a,b}=target.edge;
+          if(Math.abs(cross(u,unit(sub(b,a))))>.0001||dot(target.normal,normal)<.999)continue;
           const span=[a,b].map(p=>dot(sub(p,edge.a),u));
           if(Math.min(Math.max(...span),distance(edge.a,edge.b))-Math.max(0,Math.min(...span))<.05)continue;
           const amount=dot(sub(a,edge.a),normal);if(Math.abs(amount)>margin)continue;
           const shift=mul(normal,amount),points=c.points.map((p,i)=>reference.end!==undefined?(i===reference.end?add(p,shift):p):(i===reference.segment||i===reference.segment+1?add(p,shift):p));
-          const next={...c,points};
+          const outline=c.outline?shiftedEdge(poly,index,-amount):null;
+          if(c.outline&&!outline)continue;
+          const next=c.outline?{...c,outline}:{...c,points};
           if(points.slice(1).some((p,i)=>dot(sub(p,points[i]),unit(sub(c.points[i+1],c.points[i])))<=.25))continue;
-          if(validCorridor(next,rooms,boundaries))choices.push({corridor:next,cost:Math.abs(amount),snapGuide:{a,b},snapped:true});
-        }
+          if(validCorridor(next,rooms,boundaries))choices.push({corridor:next,cost:Math.abs(amount),snapGuide:{a,b},snapped:true,snapKind:target.kind});
       }
     }
     return choices.sort((a,b)=>a.cost-b.cost)[0]||null;
@@ -435,7 +440,7 @@
     return face;
   }
   function columnOutline(c){return [{x:c.x-c.width/2,y:c.y-c.depth/2},{x:c.x+c.width/2,y:c.y-c.depth/2},{x:c.x+c.width/2,y:c.y+c.depth/2},{x:c.x-c.width/2,y:c.y+c.depth/2}];}
-  function columnSnapTargets(options){return options.columnSnap===false?[]:(options.columns||[]).filter(c=>c.enabled!==false).flatMap(c=>{const p=columnOutline(c);return edges(p).map(e=>({edge:e,normal:mul(inward(e,p),-1),kind:'column',thickness:0}));});}
+  function columnSnapTargets(options){return options.columnSnap===false||options.columnsEnabled===false?[]:(options.columns||[]).filter(c=>c.enabled!==false).flatMap(c=>{const p=columnOutline(c),center=options.columnSnapMode==='center';return edges(p).map(e=>{const n=inward(e,p),delta=center?mul(n,dot(sub(c,e.a),n)):{x:0,y:0};return {edge:{...e,a:add(e.a,delta),b:add(e.b,delta)},normal:mul(n,-1),kind:'column',thickness:0,center};});});}
   function snapSelection(rooms,others,boundaries,options={}) {
     const margin=options.margin??2,matches=[];
     for(const room of rooms){
@@ -460,7 +465,7 @@
         const targetExterior=neighbor&&['curtain','opening','window'].includes(faceKind(neighbor,e.index));
         // settle already offsets corridor barriers to the outside wall face.
         // Only apply the remaining allowance, never the wall thickness twice.
-        const faceOffset=column?-sourceHalf:continuation?sourceHalf-targetHalf:neighbor?.type==='corridor'? (neighbor.snapClearance||0)-sourceHalf:sourceExterior||targetExterior?-(sourceHalf+targetHalf):0;
+        const faceOffset=column?(options.columnSnapMode==='center'?0:-sourceHalf):continuation?sourceHalf-targetHalf:neighbor?.type==='corridor'? (neighbor.snapClearance||0)-sourceHalf:sourceExterior||targetExterior?-(sourceHalf+targetHalf):0;
         const gap=dot(sub(side.a,e.a),n)+faceOffset;
         if(Math.abs(gap)<=margin+EPS)matches.push({n,gap,side,e,continuation});
       }
@@ -815,7 +820,7 @@
       const sourceThickness=faceThickness(entity,reference.side,end,options.thickness??6);
       // Same-facing adjacent walls align their outside faces, even if their
       // thickness differs. Opposing walls meet on one shared centerline.
-      const faceOffset=target.kind==='corridor'||target.kind==='column'?-sourceThickness/24:continuation?(target.thickness-sourceThickness)/24:0;
+      const faceOffset=target.kind==='column'&&target.center?0:target.kind==='corridor'||target.kind==='column'?-sourceThickness/24:continuation?(target.thickness-sourceThickness)/24:0;
       const amount=dot(sub(e.a,original.a),n)+faceOffset,cost=Math.abs(amount-base.offset);
       if(cost<=margin+EPS)candidates.push({...target,amount,cost,continuation,sourceThickness});
     }
@@ -996,5 +1001,5 @@
     if(Math.abs(measure(size)-target)>.001)throw Error('That hatch size cannot be reached with the current outline and corridor cutouts.');
     return {[axis]:size};
   }
-  return {columnOutline,hatchMetrics,hatchSizePatch,roomFillContours,curtainFace,snapCorridorSegment,interiorOutline,offsetOutline,EPS,add,sub,mul,dot,cross,length,distance,unit,rotate,normalize,nearestAngle,edges,area,centroid,baseOutline,polygon,closest,inside,contains,overlaps,simple,inward,fitInside,alignToEdge,cornerFits,validBoundaryFit,validPlacement,settle,moveSelection,wallNetwork,shiftedEdge,wallReference,withManualOutline,shiftWall,snapWallDrag,sideLengthMove,doorOpening,wallJoins,wallMass,corridorPoint,corridorPolygon,validCorridor,corridorCuts,roomContours,contourArea,insideContours,contoursOverlap,secondarySnap,snapSelection,alignGroupBottom,alignRoomEdges,unionOutline,unionBoundarySegments,contactEdges};
+  return {columnSnapTargets,columnOutline,hatchMetrics,hatchSizePatch,roomFillContours,curtainFace,snapCorridorSegment,interiorOutline,offsetOutline,EPS,add,sub,mul,dot,cross,length,distance,unit,rotate,normalize,nearestAngle,edges,area,centroid,baseOutline,polygon,closest,inside,contains,overlaps,simple,inward,fitInside,alignToEdge,cornerFits,validBoundaryFit,validPlacement,settle,moveSelection,wallNetwork,shiftedEdge,wallReference,withManualOutline,shiftWall,snapWallDrag,sideLengthMove,doorOpening,wallJoins,wallMass,corridorPoint,corridorPolygon,validCorridor,corridorCuts,roomContours,contourArea,insideContours,contoursOverlap,secondarySnap,snapSelection,alignGroupBottom,alignRoomEdges,unionOutline,unionBoundarySegments,contactEdges};
 });

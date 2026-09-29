@@ -43,6 +43,15 @@ C2,-15,-20,2,2
 
 Coordinates locate column centers in feet. Tabs are also accepted. Columns remain non-bounding references and can be toggled. JSON, SVG and CAD wall-centerline DXF features remain available. Door IN/OUT roles survive JSON Save/Open.
 
+### Column snapping
+
+Under Columns, enable **Snap rooms / walls / corridors to columns** and choose **Column snap alignment**:
+
+- **Outside face** (default): aligns a room wall's outer face or a corridor edge to the facing column surface. The column stays outside the corridor.
+- **Centerline**: aligns a room wall centerline or corridor edge through the column center, incorporating it into the wall line. Part of the column may project into clear room/corridor space; this is not a clearance-approved condition.
+
+The mode applies to whole-room movement, wall resizing/extensions, corridor segment movement, corridor ends and custom-outline edges. Existing geometry is not moved when the mode changes. Hidden/disabled columns do not snap; the column-snap checkbox is independent of room snapping. Settings persist in JSON and can be undone. Columns remain reference objects: they do not clip hatches, deduct area, become room boundaries or disappear when incorporated into a wall line.
+
 ## Verification and limitations
 
 Automated checks cover all room and corridor containment, room/corridor collisions, door hosting/access, three 400-sf ORs, twelve bays, two patient toilets, six OR transfer doors and patient-only routes from waiting to PACU/ORs and to discharge. Earlier studies remain unchanged.
