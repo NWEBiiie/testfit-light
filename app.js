@@ -867,6 +867,7 @@
   $('#drawCorridor').onclick=()=>beginCorridor();
   $('#zoom').oninput=e=>{view.zoom=Number(e.target.value);draw();};$('#zoomOut').onclick=()=>{view.zoom=Math.max(.5,view.zoom/1.2);draw();};$('#zoomIn').onclick=()=>{view.zoom=Math.min(35,view.zoom*1.2);draw();};$('#fit').onclick=fit;
   function download(name,contents,type){const url=URL.createObjectURL(new Blob([contents],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+  $('#exportDxf').onclick=()=>{try{const preserveXY=$('#cadCoordinates').value==='saved';download('testfit-light-centerlines.dxf',window.LightCad.exportDxf(model,{preserveXY}),'application/dxf');status('CAD centerlines exported · 1 unit = 1 foot · '+(preserveXY?'saved X/Y preserved.':'Y reversed to match the displayed plan.'));}catch(error){status('CAD export failed: '+error.message);}};
   $('#save').onclick=()=>{download('testfit-light.json',JSON.stringify(model,null,2),'application/json');status('Editable project saved.');};$('#open').onclick=()=>$('#file').click();
   function validateFile(value){
     if(value?.schema!=='testfit-light'||!Array.isArray(value.rooms)||!Array.isArray(value.groups)||!Array.isArray(value.boundaries)||value.rooms.length>300||value.groups.length>100||value.boundaries.length>100)throw Error('Choose a TestFit Light project (up to 300 rooms and 100 boundaries).');
