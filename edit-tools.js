@@ -207,10 +207,12 @@
     const targets=[];
     if(options.roomSnap!==false)others.forEach(e=>edges(polygon(e)).forEach(edge=>targets.push({edge,kind:e.type==='corridor'?'corridor':'neighbor'})));
     if(options.boundarySnap!==false)boundaries.filter(b=>!b.groupId||b.groupId===entity.groupId).forEach(b=>edges(b.points).forEach(edge=>targets.push({edge,kind:'boundary'})));
+    if(options.columnSnap!==false)(options.columns||[]).filter(c=>c.enabled!==false).forEach(c=>{const p=G.columnOutline(c);edges(p).filter(e=>dot(G.inward(e,p),n)>.99999).forEach(edge=>targets.push({edge,kind:'column'}));});
     for(const t of targets){const v=unit(sub(t.edge.b,t.edge.a));if(Math.abs(cross(v,u))>1e-5)continue;
       const range=[t.edge.a,t.edge.b].map(p=>dot(sub(p,edge.a),u));
       if(Math.min(to*len,Math.max(...range))-Math.max(from*len,Math.min(...range))<.05)continue;
-      const snap=dot(sub(t.edge.a,edge.a),n),cost=Math.abs(snap-result.offset);if(cost<=margin)candidates.push({...t,snap,cost});
+      const spec=entity.walls?.[side],at=(from+to)/2,finish=(spec?.segments||[]).filter(s=>s.from<=at&&s.to>=at).sort((a,b)=>(b.revision||0)-(a.revision||0))[0]||spec;
+      const snap=dot(sub(t.edge.a,edge.a),n)-(t.kind==='column'?(finish?.thickness||6)/24:0),cost=Math.abs(snap-result.offset);if(cost<=margin)candidates.push({...t,snap,cost});
     }
     for(const c of candidates.sort((a,b)=>a.cost-b.cost)){const snap=attempt(c.snap);if(snap&&snap.reshaped)return {...snap,snapped:true,snapKind:c.kind,snapGuide:c.edge};}
     return {...result,limited:Math.abs(amount-offset)>.001};

@@ -8,7 +8,8 @@
   let isolatedRoom=null,wallExtension=null,selectedCorridorSide=null;
   let completedRoomClick=null,handledDoubleClickUntil=0;
   let walls=[],doorViews=[],undo=[],redo=[],view={x:32,y:22,zoom:10},size={width:900,height:600};
-  const defaultModel=()=>({schema:'testfit-light',version:7,nextId:1,revision:1,rooms:[],groups:[],boundaries:[],corridors:[],doors:[],settings:{wallStyle:'poche',thickness:6,boundarySnap:true,roomSnap:true,margin:2}});
+  const defaultModel=()=>({schema:'testfit-light',version:7,nextId:1,revision:1,rooms:[],groups:[],boundaries:[],corridors:[],doors:[],columns:[],portals:[],settings:{wallStyle:'poche',thickness:6,boundarySnap:true,roomSnap:true,columnsEnabled:true,columnSnap:true,margin:2}});
+  const snapOptions=()=>({...model.settings,columns:model.settings.columnsEnabled===false?[]:(model.columns||[])});
   const getRoom=id=>model.rooms.find(r=>r.id===Number(id));
   const getCorridor=id=>model.corridors.find(c=>c.id===Number(id));
   const getEntity=id=>getRoom(id)||getCorridor(id);
@@ -37,7 +38,7 @@
   function world(event){const rect=plan.getBoundingClientRect();return {x:(event.clientX-rect.left-size.width/2)/view.zoom+view.x,y:(event.clientY-rect.top-size.height/2)/view.zoom+view.y};}
   const path=points=>points.map((p,i)=>{const q=screen(p);return (i?'L':'M')+q.x.toFixed(2)+' '+q.y.toFixed(2);}).join(' ')+' Z';
   function line(a,b,attrs=''){const p=screen(a),q=screen(b);return `<line x1="${p.x}" y1="${p.y}" x2="${q.x}" y2="${q.y}" ${attrs}/>`;}
-  function fit(){const points=[...obstacles().flatMap(G.polygon),...model.boundaries.flatMap(b=>b.points)];if(!points.length){view={x:25,y:20,zoom:10};draw();return;}
+  function fit(){const columns=model.settings.columnsEnabled===false?[]:(model.columns||[]).filter(c=>c.enabled!==false);const points=[...obstacles().flatMap(G.polygon),...model.boundaries.flatMap(b=>b.points),...columns.flatMap(G.columnOutline)];if(!points.length){view={x:25,y:20,zoom:10};draw();return;}
     const xs=points.map(p=>p.x),ys=points.map(p=>p.y),x=Math.min(...xs),y=Math.min(...ys),w=Math.max(...xs)-x,h=Math.max(...ys)-y;
     const boundaryOnly=model.reference?.variant==='boundary';
     view={x:x+w/2,y:y+h/2,zoom:Math.max(.5,Math.min(25,(size.width-(boundaryOnly?230:70))/(w+4),(size.height-(boundaryOnly?180:100))/(h+4)))};draw();}
@@ -251,6 +252,8 @@
     const dimensionRoom=one()&&rooms.find(r=>r.id===one().id);if(dimensionRoom&&!drawing&&!doorPlacement)svg+=drawDimensions(dimensionRoom);
     const activePath=corridors.find(c=>c.id===activeCorridor);if(activePath&&!drawing&&!doorPlacement)svg+=drawCorridorEdges(activePath);
     doorViews.forEach(d=>svg+=drawDoor(d));
+    if(model.settings.columnsEnabled!==false)(model.columns||[]).filter(c=>c.enabled!==false).forEach(c=>{const p=screen(c);svg+=`<g data-column="${c.id}" pointer-events="none"><title>${esc(c.name)} · center (${fmt(c.x)}, ${fmt(c.y)}) · reference only</title><path d="${path(G.columnOutline(c))}" fill="#475569" stroke="#fff" stroke-width="1.2"/><text x="${p.x+7}" y="${p.y-7}" font-size="10" fill="#334155" stroke="#fff" stroke-width="3" paint-order="stroke">${esc(c.name)}</text></g>`;});
+    (model.portals||[]).forEach(p=>{const q=screen(p),color=p.kind==='entry'?'#147d63':'#a14b12',dir=p.kind==='entry'?-1:1;svg+=`<g class="patient-portal" pointer-events="none"><title>${esc(p.name)} · ${fmt(p.clearWidth)} ft recess · verify clear opening</title><circle cx="${q.x}" cy="${q.y}" r="6" fill="${color}"/><path d="M${q.x-dir*25} ${q.y}h${dir*50} m${-dir*8} -5 l${dir*8} 5 l${-dir*8} 5" stroke="${color}" fill="none" stroke-width="2.5"/><text x="${q.x+15}" y="${q.y-14}" font-size="12" font-weight="bold" fill="${color}" stroke="white" stroke-width="4" paint-order="stroke">${esc(p.name)}</text></g>`;});
     if(model.settings.boundaryReview===true){
       const site=model.boundaries.find(b=>!b.groupId);
       if(site){svg+='<path d="'+path(site.points)+'" fill="none" stroke="#235bb7" stroke-width="2" pointer-events="none"/>';
@@ -270,11 +273,17 @@
     $('#wallCount').textContent=walls.filter(w=>w.owners.length>1).length+' shared wall segments';
   }
   function render(){$('#addDoor').textContent=doorPlacement?'Stop adding doors':'＋ Add door';$('#addDoor').classList.toggle('active',!!doorPlacement);$('#addDoor').setAttribute('aria-pressed',String(!!doorPlacement));renderLists();draw();renderInspector();$('#undo').disabled=!undo.length;$('#redo').disabled=!redo.length;$('#finish').hidden=!drawing||!['poly','corridor'].includes(drawing.type);$('#finish').textContent=drawing?.type==='corridor'?'Stop drawing':'Finish boundary';$('#pathDrawingBar').hidden=drawing?.type!=='corridor';$('#corridorDirection').disabled=!!drawing;$('#pathDrawingHint').textContent=drawing?.drawMode==='free'?'Free angle · click end, then stop.':'90° corners · click end, then stop.';$('#resumeDrawing').hidden=!stoppedDrawing;$('#discardDraft').hidden=!stoppedDrawing;$('#cancel').hidden=!drawing;$('#undoPoint').hidden=!drawing||!['poly','corridor'].includes(drawing.type);}
+  function validColumn(c){return c&&[c.x,c.y,c.width,c.depth].every(Number.isFinite)&&Math.abs(c.x)<=1e6&&Math.abs(c.y)<=1e6&&c.width>=.1&&c.width<=100&&c.depth>=.1&&c.depth<=100;}
+  function renderColumns(){
+    const panel=$('#columnList');if(!panel)return;
+    $('#columnsEnabled').checked=model.settings.columnsEnabled!==false;$('#columnSnap').checked=model.settings.columnSnap!==false;
+    panel.innerHTML=(model.columns||[]).map(c=>`<div class="column-item"><label class="check"><input type="checkbox" data-column-id="${c.id}" data-column-field="enabled" ${c.enabled?'checked':''}>${esc(c.name)}</label><div class="two">${['x','y','width','depth'].map(field=>`<label>${{x:'Center X · ft',y:'Center Y · ft',width:'Width · ft',depth:'Depth · ft'}[field]}<input type="number" step="any" value="${c[field]}" aria-label="${esc(c.name)} ${field}" data-column-id="${c.id}" data-column-field="${field}"></label>`).join('')}</div><button type="button" class="text-button danger" data-delete-column="${c.id}">Remove ${esc(c.name)}</button></div>`).join('')||'<p class="hint">No columns placed. Enter their surveyed centers below; no structural locations are assumed.</p>';
+  }
   function renderStudyAdvice(){
     const panel=$('#studyAdvice'),study=window.LightSeptemberStudies,note=study?.notes[model.reference?.variant];
     if(!panel)return;panel.hidden=!note;if(!note){panel.innerHTML='';return;}
     const categoryNames={plant:'MEP / chase',admin:'Administration',patient:'Patient care',support:'Support',public:'Public space',treatment:'Diagnostic / treatment'};
-    panel.innerHTML=`<p class="study-summary">${esc(note.description)}</p><p class="hint">Preset program: 2 × 600-sf ORs · 10 × 120-sf bays · 150-sf PT · 170-sf meds · 8-ft clear corridors.</p><p class="notice warning">${esc(note.tradeoff)} Waiting/reception is reduced to 500 sf; engineering and support functions are consolidated. Capacity is unverified.</p><details><summary>Compare the three options</summary><p class="hint">Approximate threshold-to-threshold routes along the drawn corridor centerlines, to the nearest OR patient door. These are preset measurements, not live results after editing or evidence of clinical performance.</p>${Object.values(study.notes).map(n=>`<div class="study-comparison"><strong>${esc(n.title)}</strong><span>Nursing → OR: ~${n.nurseRoute} ft<br>PT → OR: ~${n.ptRoute} ft</span></div>`).join('')}</details><details><summary>Client room colors</summary><div class="study-legend">${Object.entries(study.colors).map(([key,color])=>`<span><i style="background:${color}"></i>${categoryNames[key]}</span>`).join('')}</div></details><p class="hint">Design notes describe the starting preset; geometry checks do not establish clinical or code compliance.</p>`;
+    panel.innerHTML=`<p class="study-summary">${esc(note.description)}</p><p class="hint">Preset: 2 × 600-sf ORs · 10 × 120-sf bays · ${fmt(note.pt)}-sf PT · 170-sf meds. Bottom recess = arrival; top recess = discharge.</p><p class="notice warning">${esc(note.tradeoff)} Waiting/reception: ${note.waiting} sf. Recesses narrow to 7.67 ft at entry and 6.83 ft at discharge; routes widen to 8 ft inside. Capacity and accessibility are unverified.</p><details><summary>Compare the three options</summary><p class="hint">Preset areas, not live values after editing. The OR/bay shell is shared; waiting, PT, staff and nursing/support arrangements differ.</p>${Object.values(study.notes).map(n=>`<div class="study-comparison"><strong>${esc(n.title)}</strong><span>Waiting: ${n.waiting} sf<br>PT / discharge: ${fmt(n.pt)} sf</span></div>`).join('')}</details><details><summary>Client room colors</summary><div class="study-legend">${Object.entries(study.colors).map(([key,color])=>`<span><i style="background:${color}"></i>${categoryNames[key]}</span>`).join('')}</div></details><p class="hint">Design studies only: clean/dirty separation, far-bank nursing visibility, bay-aisle dead ends, egress and equipment clearances still require review.</p>`;
   }
   function renderLists(){
     if($('#layoutChoice'))$('#layoutChoice').value=model.reference?.variant||'';
@@ -286,7 +295,7 @@
     $('#makeGroup').disabled=selected.size<2;
     $('#groupList').innerHTML=model.groups.map(g=>`<button class="group-button ${activeGroup===g.id?'active':''}" data-group="${g.id}">${esc(g.name)}<small>${groupRooms(g.id).length} rooms</small></button>`).join('')||'<p class="hint">Select two or more rooms to make a group.</p>';
     $('#corridorList').innerHTML=model.corridors.map(c=>`<div class="corridor-row"><button class="side-button ${activeCorridor===c.id?'active':''}" data-corridor="${c.id}"><span>${esc(c.name)}</span><small>${c.outline?'Custom outline':fmt(c.width)+' ft wide'}</small></button><button class="danger corridor-delete" type="button" data-delete-corridor="${c.id}" aria-label="Delete ${esc(c.name)}" title="Delete corridor · Undo restores it">Delete</button></div>`).join('')||'<p class="hint">Click once per corner, then Stop drawing. The corridor forms a barrier and cuts back overlapping rooms.</p>';
-    renderExclusionControls();
+    renderExclusionControls();renderColumns();
     $('#boundaryCount').textContent=model.boundaries.length;
     $('#boundaryList').innerHTML=model.boundaries.map(b=>`<div class="boundary-item"><div><strong>${esc(b.name)}</strong><small>${fmt(G.area(b.points))} sf · ${b.groupId?'group':'site'}</small></div><button data-remove-boundary="${b.id}" aria-label="Remove ${esc(b.name)}">×</button></div>`).join('')||'<p class="hint">Draw a site boundary above the plan.</p>';
   }
@@ -372,11 +381,11 @@
     // temporary shared wall created by snapping against a locked neighbor.
     if(!one()||one().locked||one().id!==(drag.selectedRoomId??drag.reference.roomId)){status('Select one adjoining, unlocked room before moving a wall.');return;}
     const offset=G.dot(G.sub(p,drag.start),drag.normal);if(Math.abs(offset)*view.zoom<2&&!drag.moved)return;
-    drag.moved=true;const entities=drag.before.rooms.concat(drag.before.corridors),options={...model.settings,isolatedId:drag.isolatedId};
+    drag.moved=true;const entities=drag.before.rooms.concat(drag.before.corridors),options={...snapOptions(),isolatedId:drag.isolatedId};
     const result=drag.part?E.extendWall(entities,drag.reference,drag.part.from,drag.part.to,offset,drag.before.boundaries,options):E.moveWall(entities,drag.reference,offset,drag.before.boundaries,options);
     if(result.error){status(result.error);return;}
     drag.result=result;wallPreview={rooms:result.entities.filter(e=>e.type!=='corridor'),corridors:result.entities.filter(e=>e.type==='corridor')};draw();
-    status('Wall shift: '+fmt(result.offset)+' ft'+(result.snapped?' · snapped to '+(result.snapKind==='boundary'?'outer / group boundary':result.snapKind==='corridor'?'corridor edge':'parallel neighboring wall')+'.':result.limited?' · stopped at a room or boundary.':' · areas update on release.'));
+    status('Wall shift: '+fmt(result.offset)+' ft'+(result.snapped?' · snapped to '+(result.snapKind==='boundary'?'outer / group boundary':result.snapKind==='corridor'?'corridor edge':result.snapKind==='column'?'column outer face':'parallel neighboring wall')+'.':result.limited?' · stopped at a room or boundary.':' · areas update on release.'));
   }
   function beginWallDrag(id,p){
     const wall=walls.find(w=>w.id===id),allowed=canMoveWall(wall);
@@ -668,7 +677,7 @@
     const anchor=drag.original.find(r=>r.id===drag.roomId),current=drag.lastGood.find(r=>r.id===drag.roomId);
     const remaining=G.sub(G.add(anchor,delta),current),others=drag.original.filter(r=>!selected.has(r.id)).concat(model.corridors);
     // Use the chosen physical snap distance for single rooms AND groups.
-    drag.placement=G.moveSelection(drag.lastGood,remaining,others,model.boundaries,{...model.settings,margin:model.settings.margin,ghostRooms:true,ghostCorridors:true,recoverOutside:true,releaseRooms:drag.original.filter(r=>selected.has(r.id))});
+    drag.placement=G.moveSelection(drag.lastGood,remaining,others,model.boundaries,{...snapOptions(),margin:model.settings.margin,ghostRooms:true,ghostCorridors:true,recoverOutside:true,releaseRooms:drag.original.filter(r=>selected.has(r.id))});
     drag.lastGood=drag.placement.rooms;
     preview=drag.original.map(r=>drag.lastGood.find(next=>next.id===r.id)||r);
     status(drag.placement.message);draw();
@@ -755,6 +764,11 @@
     $('#applyExclusion').onclick=()=>editExclusion({width:Number($('#exclusionWidth').value),height:Number($('#exclusionHeight').value)});
     $('#resetExclusion').onclick=()=>editExclusion({enabled:true,width:50,height:40});
   }
+  $('.corridor-section').insertAdjacentHTML('beforebegin','<section id="columnsPanel"><h2>Columns · reference objects</h2><label class="check"><input id="columnsEnabled" type="checkbox" checked> Show / enable columns</label><label class="check"><input id="columnSnap" type="checkbox" checked> Snap walls / rooms to column faces</label><p class="hint">Coordinates are column centers in feet. Columns are not room boundaries: they never clip hatches, change room area or block movement. Hiding or disabling a column also disables its snapping. This is a reference overlay, not a structural clearance check.</p><div id="columnList"></div><form id="columnForm"><label>Name<input id="columnName" value="C1" maxlength="32" required></label><div class="two"><label>Center X · ft<input id="columnX" type="number" value="-30" step="any" required></label><label>Center Y · ft<input id="columnY" type="number" value="-30" step="any" required></label><label>Width · ft<input id="columnWidth" type="number" value="1.5" min="0.1" max="100" step="any" required></label><label>Depth · ft<input id="columnDepth" type="number" value="1.5" min="0.1" max="100" step="any" required></label></div><button type="submit" class="wide">＋ Place column</button></form></section>');
+  $('#columnForm').onsubmit=e=>{e.preventDefault();const c={name:$('#columnName').value.trim()||'Column',x:Number($('#columnX').value),y:Number($('#columnY').value),width:Number($('#columnWidth').value),depth:Number($('#columnDepth').value),enabled:true};if(!validColumn(c)){status('Enter finite X/Y centers and column dimensions from 0.1 to 100 ft.');return;}checkpoint();c.id=model.nextId++;(model.columns??=[]).push(c);$('#columnName').value='C'+(model.columns.length+1);render();status('Column placed. Room geometry and hatched areas are unchanged.');};
+  for(const [id,key] of [['columnsEnabled','columnsEnabled'],['columnSnap','columnSnap']])$('#'+id).onchange=e=>{checkpoint();model.settings[key]=e.target.checked;render();status(key==='columnSnap'?'Column snapping '+(e.target.checked?'on.':'off.'):'Column overlay '+(e.target.checked?'on.':'off.'));};
+  $('#columnList').onchange=e=>{const field=e.target.dataset.columnField,c=(model.columns||[]).find(c=>c.id===Number(e.target.dataset.columnId));if(!c||!['enabled','x','y','width','depth'].includes(field))return;const next={...c,[field]:field==='enabled'?e.target.checked:e.target.value===''?NaN:Number(e.target.value)};if(!validColumn(next)){renderColumns();status('Invalid column coordinates or size; nothing changed.');return;}checkpoint();Object.assign(c,next);render();status('Column updated; rooms unchanged.');};
+  $('#columnList').onclick=e=>{const id=Number(e.target.dataset.deleteColumn);if(!(model.columns||[]).some(c=>c.id===id))return;checkpoint();model.columns=model.columns.filter(c=>c.id!==id);render();status('Column removed. Undo restores it.');};
   let svgCandidates=[],boundaryImportType='SVG';
   const boundaryPointsExample='{\n  "points": [\n    {"x": 0, "y": 0},\n    {"x": 100, "y": 0},\n    {"x": 100, "y": 80},\n    {"x": 0, "y": 80}\n  ]\n}';
   $('#svgChoose').insertAdjacentHTML('beforebegin',`<details id="boundaryPointsEditor" open><summary>New boundary from points · X / Y</summary><p class="hint" id="boundaryPointsHelp">Use the same "points" object as the saved JSON file, with an "x" and "y" value for each corner. Edit the example below or load your current boundary. Values are feet; X goes right and Y goes down. List corners around the perimeter; the last connects to the first. JSON uses a colon (:) after each name, not an equals sign.</p><label>Boundary points · named X / Y<textarea id="boundaryPoints" rows="10" spellcheck="false" aria-describedby="boundaryPointsHelp"></textarea></label><div class="two"><button id="boundaryPointsCurrent" type="button">Use current boundary</button><button id="boundaryPointsExample" type="button">Load X / Y example</button></div><button id="boundaryPointsPreview" type="button" class="wide">Preview points</button><p class="hint">Preview does not change your plan. Then choose “Replace boundary · keep rooms in place” or a separate study below, and Apply.</p></details>`);
@@ -886,6 +900,11 @@
       if(!host||!Number.isInteger(d.side)||!G.edges(G.polygon(host))[d.side]||!Number.isFinite(d.width)||d.width<.5||d.width>12||!Number.isFinite(d.position)||d.position<0||d.position>1)throw Error('Invalid hosted door or missing host wall.');
       return {id,hostId:host.id,side:d.side,width:d.width,position:d.position,...(d.leaves===2?{leaves:2}:{}),hinge:d.hinge==='end'?'end':'start',swing:d.swing===-1?-1:1};
     });
+    if(value.columns!==undefined&&(!Array.isArray(value.columns)||value.columns.length>500))throw Error('Use at most 500 columns.');
+    next.columns=(value.columns||[]).map(c=>{if(!validColumn(c))throw Error('Invalid column coordinates or dimensions.');return {id:cleanId(c.id),name:String(c.name||'Column').slice(0,32),x:c.x,y:c.y,width:c.width,depth:c.depth,enabled:c.enabled!==false};});
+    if(value.portals!==undefined&&(!Array.isArray(value.portals)||value.portals.length>20))throw Error('Use at most 20 entrance/discharge markers.');
+    next.portals=(value.portals||[]).map(p=>{if(!['entry','discharge'].includes(p.kind)||![p.x,p.y,p.clearWidth].every(Number.isFinite)||Math.abs(p.x)>1e6||Math.abs(p.y)>1e6||p.clearWidth<=0||p.clearWidth>100)throw Error('Invalid patient access marker.');return {name:String(p.name||p.kind).slice(0,48),kind:p.kind,x:p.x,y:p.y,clearWidth:p.clearWidth};});
+    next.settings.columnsEnabled=value.settings?.columnsEnabled!==false;next.settings.columnSnap=value.settings?.columnSnap!==false;
     next.nextId=Math.max(0,...ids)+1;next.revision=Math.max(1,...next.rooms.concat(next.corridors).flatMap(r=>r.walls.flatMap(w=>[w.revision,...w.segments.map(s=>s.revision)])))+1;return H.migrate(next);
   }
   function sanitizeWall(w={},thickness=6){const spec={kind:['wall','door','curtain','opening','window'].includes(w.kind)?w.kind:'wall',thickness:Math.max(1,Math.min(36,Number(w.thickness)||thickness)),doorWidth:Math.max(.5,Math.min(12,Number(w.doorWidth)||3)),position:Math.max(0,Math.min(1,Number.isFinite(w.position)?w.position:.5)),hinge:w.hinge==='end'?'end':'start',swing:w.swing===-1?-1:1,revision:Math.max(0,Math.min(1e6,Number(w.revision)||0)),segments:[]};spec.segments=(Array.isArray(w.segments)?w.segments:[]).slice(-200).map(e=>{const part=sanitizeWall({...e,segments:[]},thickness);delete part.segments;return {...part,from:Math.max(0,Math.min(1,Number(e.from)||0)),to:Math.max(0,Math.min(1,Number(e.to)||1))};});return spec;}

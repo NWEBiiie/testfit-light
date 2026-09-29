@@ -429,13 +429,16 @@
     }
     return face;
   }
+  function columnOutline(c){return [{x:c.x-c.width/2,y:c.y-c.depth/2},{x:c.x+c.width/2,y:c.y-c.depth/2},{x:c.x+c.width/2,y:c.y+c.depth/2},{x:c.x-c.width/2,y:c.y+c.depth/2}];}
+  function columnSnapTargets(options){return options.columnSnap===false?[]:(options.columns||[]).filter(c=>c.enabled!==false).flatMap(c=>{const p=columnOutline(c);return edges(p).map(e=>({edge:e,normal:mul(inward(e,p),-1),kind:'column',thickness:0}));});}
   function snapSelection(rooms,others,boundaries,options={}) {
     const margin=options.margin??2,matches=[];
     for(const room of rooms){
       const poly=polygon(room),sources=[];
       if(options.boundarySnap!==false)boundaries.filter(b=>!b.groupId||b.groupId===room.groupId).forEach(b=>edges(b.points).forEach(e=>sources.push({e,n:inward(e,b.points)})));
       if(options.roomSnap!==false)others.forEach(r=>{const p=polygon(r);edges(p).forEach(e=>sources.push({e,n:mul(inward(e,p),-1),neighbor:r}));});
-      for(const side of edges(poly))for(const {e,n,neighbor} of sources){
+      columnSnapTargets(options).forEach(t=>sources.push({e:t.edge,n:t.normal,column:true}));
+      for(const side of edges(poly))for(const {e,n,neighbor,column} of sources){
         const facing=dot(inward(side,poly),n),continuation=!!neighbor&&facing<-.99999;
         if(facing<.99999&&!continuation)continue;
         const u=unit(sub(e.b,e.a)),span=[side.a,side.b].map(p=>dot(sub(p,e.a),u));
@@ -452,7 +455,7 @@
         const targetExterior=neighbor&&['curtain','opening','window'].includes(faceKind(neighbor,e.index));
         // settle already offsets corridor barriers to the outside wall face.
         // Only apply the remaining allowance, never the wall thickness twice.
-        const faceOffset=continuation?sourceHalf-targetHalf:neighbor?.type==='corridor'? (neighbor.snapClearance||0)-sourceHalf:sourceExterior||targetExterior?-(sourceHalf+targetHalf):0;
+        const faceOffset=column?-sourceHalf:continuation?sourceHalf-targetHalf:neighbor?.type==='corridor'? (neighbor.snapClearance||0)-sourceHalf:sourceExterior||targetExterior?-(sourceHalf+targetHalf):0;
         const gap=dot(sub(side.a,e.a),n)+faceOffset;
         if(Math.abs(gap)<=margin+EPS)matches.push({n,gap,side,e,continuation});
       }
@@ -740,7 +743,7 @@
   }
   function snapWallDrag(entities,reference,offset,boundaries=[],options={}) {
     const base=shiftWall(entities,reference,offset,boundaries,true,options),margin=Number(options.margin??2);
-    if(base.error||!Number.isFinite(margin)||margin<=0||(options.roomSnap===false&&options.boundarySnap===false))return base;
+    if(base.error||!Number.isFinite(margin)||margin<=0||(options.roomSnap===false&&options.boundarySnap===false&&!columnSnapTargets(options).length))return base;
     const entity=entities.find(e=>e.id===reference.roomId),original=edges(polygon(entity))[reference.side];
     const current=edges(polygon(base.entities.find(e=>e.id===entity.id)))[reference.side];
     const u=unit(sub(original.b,original.a)),n=base.normal,changed=new Set(base.changedIds),targets=[],candidates=[];
@@ -754,6 +757,7 @@
     if(options.roomSnap!==false)corridorCuts(entities.filter(e=>e.type==='corridor'&&!changed.has(e.id)),boundaries).forEach(poly=>edges(poly).forEach(e=>targets.push({edge:e,normal:mul(inward(e,poly),-1),thickness:0,kind:'corridor'})));
     if(options.boundarySnap!==false)boundaries.filter(b=>!b.groupId||b.groupId===entity.groupId).forEach(b=>
       edges(b.points).forEach(e=>targets.push({edge:e,normal:inward(e,b.points),kind:'boundary'})));
+    targets.push(...columnSnapTargets(options));
     function nearby(side,target,continuation){
       const axis=unit(sub(target.b,target.a)),span=[side.a,side.b].map(p=>dot(sub(p,target.a),axis));
       const overlap=Math.min(Math.max(...span),distance(target.a,target.b))-Math.max(0,Math.min(...span));
@@ -774,7 +778,7 @@
       const sourceThickness=faceThickness(entity,reference.side,end,options.thickness??6);
       // Same-facing adjacent walls align their outside faces, even if their
       // thickness differs. Opposing walls meet on one shared centerline.
-      const faceOffset=target.kind==='corridor'?-sourceThickness/24:continuation?(target.thickness-sourceThickness)/24:0;
+      const faceOffset=target.kind==='corridor'||target.kind==='column'?-sourceThickness/24:continuation?(target.thickness-sourceThickness)/24:0;
       const amount=dot(sub(e.a,original.a),n)+faceOffset,cost=Math.abs(amount-base.offset);
       if(cost<=margin+EPS)candidates.push({...target,amount,cost,continuation,sourceThickness});
     }
@@ -955,5 +959,5 @@
     if(Math.abs(measure(size)-target)>.001)throw Error('That hatch size cannot be reached with the current outline and corridor cutouts.');
     return {[axis]:size};
   }
-  return {hatchMetrics,hatchSizePatch,roomFillContours,curtainFace,snapCorridorSegment,interiorOutline,offsetOutline,EPS,add,sub,mul,dot,cross,length,distance,unit,rotate,normalize,nearestAngle,edges,area,centroid,baseOutline,polygon,closest,inside,contains,overlaps,simple,inward,fitInside,alignToEdge,cornerFits,validBoundaryFit,validPlacement,settle,moveSelection,wallNetwork,shiftedEdge,wallReference,withManualOutline,shiftWall,snapWallDrag,sideLengthMove,doorOpening,wallJoins,wallMass,corridorPoint,corridorPolygon,validCorridor,corridorCuts,roomContours,contourArea,insideContours,contoursOverlap,secondarySnap,snapSelection,alignGroupBottom,alignRoomEdges,unionOutline,unionBoundarySegments,contactEdges};
+  return {columnOutline,hatchMetrics,hatchSizePatch,roomFillContours,curtainFace,snapCorridorSegment,interiorOutline,offsetOutline,EPS,add,sub,mul,dot,cross,length,distance,unit,rotate,normalize,nearestAngle,edges,area,centroid,baseOutline,polygon,closest,inside,contains,overlaps,simple,inward,fitInside,alignToEdge,cornerFits,validBoundaryFit,validPlacement,settle,moveSelection,wallNetwork,shiftedEdge,wallReference,withManualOutline,shiftWall,snapWallDrag,sideLengthMove,doorOpening,wallJoins,wallMass,corridorPoint,corridorPolygon,validCorridor,corridorCuts,roomContours,contourArea,insideContours,contoursOverlap,secondarySnap,snapSelection,alignGroupBottom,alignRoomEdges,unionOutline,unionBoundarySegments,contactEdges};
 });
