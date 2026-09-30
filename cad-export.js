@@ -46,5 +46,15 @@
     for(const e of items){pair(0,e.type);pair(100,'AcDbEntity');pair(8,e.layer);if(e.type==='LINE'){pair(100,'AcDbLine');xyz(e.a);xyz(e.b,11);}else{pair(100,'AcDbCircle');xyz(e.center);pair(40,e.radius);pair(100,'AcDbArc');pair(50,e.start);pair(51,e.end);}}
     pair(0,'ENDSEC');pair(0,'EOF');return out.join('\r\n')+'\r\n';
   }
-  return {curves,exportDxf};
+  function exportWallSvg(model){
+    // SVG geometry stays in model feet; physical inches encode a 1:1 scale.
+    // Do not copy the rendered canvas: it contains fills, masks and screen UI.
+    const items=curves(model,{preserveXY:true}).filter(e=>e.type==='LINE'&&['WALL_CENTERLINES','EXTERIOR_WALL_CENTERLINES','WINDOWS'].includes(e.layer));
+    const points=items.flatMap(e=>[e.a,e.b]),xs=points.map(p=>p.x),ys=points.map(p=>p.y);
+    const x=points.length?Math.min(...xs)-1:0,y=points.length?Math.min(...ys)-1:0,w=points.length?Math.max(...xs)-x+1:1,h=points.length?Math.max(...ys)-y+1:1;
+    const n=v=>{if(!Number.isFinite(v))throw Error('Invalid SVG coordinate');return String(Number(v.toFixed(9)));};
+    const groups=[...new Set(items.map(e=>e.layer))].map(layer=>`<g id="${layer}">${items.filter(e=>e.layer===layer).map(e=>`<line x1="${n(e.a.x)}" y1="${n(e.a.y)}" x2="${n(e.b.x)}" y2="${n(e.b.y)}"/>`).join('')}</g>`).join('');
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${n(w*12)}in" height="${n(h*12)}in" viewBox="${n(x)} ${n(y)} ${n(w)} ${n(h)}" fill="none" stroke="black" stroke-width="0.01"><title>TestFit Light wall centerlines — 1 drawing unit = 1 foot</title>${groups}</svg>\n`;
+  }
+  return {curves,exportDxf,exportWallSvg};
 });
