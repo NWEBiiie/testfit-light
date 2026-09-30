@@ -49,11 +49,14 @@
   function exportWallSvg(model){
     // SVG geometry stays in model feet; physical inches encode a 1:1 scale.
     // Do not copy the rendered canvas: it contains fills, masks and screen UI.
-    const items=curves(model,{preserveXY:true}).filter(e=>e.type==='LINE'&&['WALL_CENTERLINES','EXTERIOR_WALL_CENTERLINES','WINDOWS'].includes(e.layer));
-    const points=items.flatMap(e=>[e.a,e.b]),xs=points.map(p=>p.x),ys=points.map(p=>p.y);
+    const items=curves(model,{preserveXY:true}).filter(e=>['WALL_CENTERLINES','EXTERIOR_WALL_CENTERLINES','WINDOWS','DOOR_PANELS','DOOR_SWINGS'].includes(e.layer));
+    const arcPoint=(e,angle)=>({x:e.center.x+e.radius*Math.cos(angle*Math.PI/180),y:e.center.y+e.radius*Math.sin(angle*Math.PI/180)});
+    const sweep=e=>(e.end-e.start+360)%360;
+    const points=items.flatMap(e=>e.type==='LINE'?[e.a,e.b]:[e.start,e.end,...[0,90,180,270].filter(a=>(a-e.start+360)%360<=sweep(e))].map(a=>arcPoint(e,a))),xs=points.map(p=>p.x),ys=points.map(p=>p.y);
     const x=points.length?Math.min(...xs)-1:0,y=points.length?Math.min(...ys)-1:0,w=points.length?Math.max(...xs)-x+1:1,h=points.length?Math.max(...ys)-y+1:1;
     const n=v=>{if(!Number.isFinite(v))throw Error('Invalid SVG coordinate');return String(Number(v.toFixed(9)));};
-    const groups=[...new Set(items.map(e=>e.layer))].map(layer=>`<g id="${layer}">${items.filter(e=>e.layer===layer).map(e=>`<line x1="${n(e.a.x)}" y1="${n(e.a.y)}" x2="${n(e.b.x)}" y2="${n(e.b.y)}"/>`).join('')}</g>`).join('');
+    const element=e=>{if(e.type==='LINE')return `<line x1="${n(e.a.x)}" y1="${n(e.a.y)}" x2="${n(e.b.x)}" y2="${n(e.b.y)}"/>`;const a=arcPoint(e,e.start),b=arcPoint(e,e.end);return `<path d="M ${n(a.x)} ${n(a.y)} A ${n(e.radius)} ${n(e.radius)} 0 ${sweep(e)>180?1:0} 1 ${n(b.x)} ${n(b.y)}"/>`;};
+    const groups=[...new Set(items.map(e=>e.layer))].map(layer=>`<g id="${layer}">${items.filter(e=>e.layer===layer).map(element).join('')}</g>`).join('');
     return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${n(w*12)}in" height="${n(h*12)}in" viewBox="${n(x)} ${n(y)} ${n(w)} ${n(h)}" fill="none" stroke="black" stroke-width="0.01"><title>TestFit Light wall centerlines — 1 drawing unit = 1 foot</title>${groups}</svg>\n`;
   }
   return {curves,exportDxf,exportWallSvg};
