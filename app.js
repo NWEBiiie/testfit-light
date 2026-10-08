@@ -7,7 +7,7 @@
   let isolatedRoom=null,wallExtension=null,selectedCorridorSide=null;
   let completedRoomClick=null,handledDoubleClickUntil=0;
   let walls=[],doorViews=[],undo=[],redo=[],view={x:32,y:22,zoom:10},size={width:900,height:600};
-  const defaultModel=()=>({schema:'testfit-light',version:7,nextId:1,revision:1,rooms:[],groups:[],boundaries:[],corridors:[],doors:[],columns:[],portals:[],settings:{wallStyle:'poche',thickness:6,exteriorThickness:12,boundarySnap:true,roomSnap:true,columnsEnabled:true,columnSnap:true,columnSnapMode:'face',margin:2}});
+  const defaultModel=()=>({schema:'testfit-light',version:7,nextId:1,revision:1,rooms:[],groups:[],boundaries:[],corridors:[],doors:[],columns:[],portals:[],settings:{wallStyle:'poche',thickness:6,exteriorThickness:12,boundarySnap:true,roomSnap:true,solidWallSnap:'middle',columnsEnabled:true,columnSnap:true,columnSnapMode:'face',margin:2}});
   const snapOptions=()=>({...model.settings,columns:model.settings.columnsEnabled===false?[]:(model.columns||[])});
   const getRoom=id=>model.rooms.find(r=>r.id===Number(id));
   const getCorridor=id=>model.corridors.find(c=>c.id===Number(id));
@@ -93,6 +93,7 @@
     variant=variant||window.location?.search?.match(/[?&]layout=(advice1|advice2|advice3|previous|points|saved|boundary)(?:&|$)/)?.[1]||'advice1';
     model=H.migrate(window.LightSeptemberStudies?.models[variant]?copy(window.LightSeptemberStudies.models[variant]):variant==='boundary'?copy(window.LightBoundaryStudy):window.createLightPhotoProject(G,variant));
     model.settings.exteriorThickness??=12;
+    model.settings.solidWallSnap??='middle';
     const site=model.boundaries.find(b=>!b.groupId);if($('#boundaryPoints')&&site){$('#boundaryPoints').value=JSON.stringify({points:site.points},null,2);clearBoundaryImport();}
     activeCorridor=null;selected=new Set(model.rooms.length?[model.rooms[0].id]:[]);selectedWall=selectedDoor=null;activeGroup=null;isolatedRoom=wallExtension=selectedCorridorSide=null;numbering=doorPlacement=drawing=stoppedDrawing=drag=preview=wallPreview=null;
     render();fit();status('Ready.');
@@ -322,7 +323,7 @@
       const site=model.boundaries.find(b=>!b.groupId);
       if(site){svg+='<path d="'+path(site.points)+'" fill="none" stroke="#235bb7" stroke-width="2" pointer-events="none"/>';
       }
-      rooms.concat(corridors).filter(r=>model.boundaries.some(b=>(!b.groupId||r.type!=='corridor'&&b.groupId===r.groupId)&&!G.contains(G.polygon(r),b.points))||r.type!=='corridor'&&rooms.some(o=>o.id!==r.id&&G.overlaps(G.polygon(r),G.polygon(o)))).forEach(r=>{svg+='<path class="boundary-conflict" d="'+path(G.polygon(r))+'" fill="none" stroke="#cf433e" stroke-width="2" stroke-dasharray="6 4" pointer-events="none"><title>'+esc(r.name)+' has a layout conflict — retained for manual adjustment</title></path>';});
+      rooms.concat(corridors).filter(r=>r.type==='corridor'?!G.validCorridor(r,[],model.boundaries):!G.validPlacement(r,rooms.filter(o=>o.id!==r.id),applicable(r),model.settings)).forEach(r=>{svg+='<path class="boundary-conflict" d="'+path(G.polygon(r))+'" fill="none" stroke="#cf433e" stroke-width="2" stroke-dasharray="6 4" pointer-events="none"><title>'+esc(r.name)+' has a layout conflict — retained for manual adjustment</title></path>';});
     }
     if(drag?.kind==='rooms'&&drag.moved&&preview){
       const moving=rooms.filter(r=>selected.has(r.id)),others=rooms.filter(r=>!selected.has(r.id)).concat(model.corridors);
@@ -534,9 +535,9 @@
     }else if(['width','depth','angle','shape'].some(key=>key in patch))proposed.boundaryFit=null;
     if(!validDimensions(proposed)){status('Enter dimensions from 2 to 500 feet and a valid angle.');render();return;}
     const others=obstacles().filter(r=>r.id!==room.id),boundaries=applicable(proposed);
-    const result=!exactSize&&(align||model.settings.boundarySnap)?G.settle(proposed,others,boundaries,{...model.settings,roomSnap:align?false:model.settings.roomSnap}):{room:G.validPlacement(proposed,others,boundaries)?proposed:null,message:exactSize?'Hatch dimensions updated. Wall thickness is excluded.':'Updated. Area and wall lengths recalculated.'};
+    const result=!exactSize&&(align||model.settings.boundarySnap)?G.settle(proposed,others,boundaries,{...model.settings,roomSnap:align?false:model.settings.roomSnap}):{room:G.validPlacement(proposed,others,boundaries,model.settings)?proposed:null,message:exactSize?'Hatch dimensions updated. Wall thickness is excluded.':'Updated. Area and wall lengths recalculated.'};
     if(!result.room&&!align&&corridorLoss(room)>.01&&
-      G.validPlacement(proposed,others.filter(r=>r.type!=='corridor'),boundaries)&&displayArea(proposed)>1){
+      G.validPlacement(proposed,others.filter(r=>r.type!=='corridor'),boundaries,model.settings)&&displayArea(proposed)>1){
       result.room=proposed;result.message='Base shape updated. The corridor still reserves its full width; displayed area excludes it.';
     }
     if(!result.room){status(align?result.message:'That edit would overlap a room or leave its boundary. Move the room or enlarge the boundary first.');render();return;}
@@ -642,13 +643,13 @@
   }
   function alignPickedEdges(ids){
     const members=ids.map(getRoom).filter(Boolean),picked=new Set(ids),side=Number($('#alignSide').value);
-    const aligned=G.alignRoomEdges(members,obstacles().filter(r=>!picked.has(r.id)),model.boundaries,side,model.settings.thickness);
+    const aligned=G.alignRoomEdges(members,obstacles().filter(r=>!picked.has(r.id)),model.boundaries,side,model.settings.thickness,model.settings);
     if(!aligned){status('Cannot align these edges without an overlap, moving a locked room, or detaching from the boundary. No rooms changed.');return;}
     if(aligned.every(r=>G.distance(r,getRoom(r.id))<.00001)){status('These wall faces are already aligned.');return;}
     checkpoint();model.rooms=model.rooms.map(r=>aligned.find(a=>a.id===r.id)||r);render();
     status(['Top','Right','Bottom','Left'][side]+' wall faces aligned. Room sizes and arrangement preserved.');
   }
-  function groupValid(rooms,boundaries=model.boundaries,corridors=[]){return rooms.every((r,i)=>G.validPlacement(r,rooms.filter((_,j)=>j!==i),boundaries.filter(b=>!b.groupId||b.groupId===r.groupId)))&&corridors.every(c=>G.validCorridor(c,rooms,boundaries));}
+  function groupValid(rooms,boundaries=model.boundaries,corridors=[],settings=model.settings){return rooms.every((r,i)=>G.validPlacement(r,rooms.filter((_,j)=>j!==i),boundaries.filter(b=>!b.groupId||b.groupId===r.groupId),settings))&&corridors.every(c=>G.validCorridor(c,rooms,boundaries));}
   function beginBoundary(type,groupId=null){numbering=doorPlacement=null;isolatedRoom=wallExtension=selectedCorridorSide=null;drawing={type,groupId,points:[]};selectedWall=selectedDoor=null;render();status(type==='rect'?'Drag the two opposite corners of the boundary.':'Click each boundary corner, then Finish boundary. Escape cancels.');}
   function finishBoundary(){if(!drawing)return;const points=drawing.preview||drawing.points;
     if(!G.simple(points)){status('Use at least three corners with no crossing edges.');return;}
@@ -768,8 +769,8 @@
     flushRoomDrag();
     if(drag.kind==='rooms'&&drag.moved&&preview){
       const moving=preview.filter(r=>selected.has(r.id)),others=preview.filter(r=>!selected.has(r.id));
-      const collision=moving.some(r=>others.some(o=>G.overlaps(G.polygon(r),G.polygon(o)))||
-        (G.validPlacement(drag.original.find(o=>o.id===r.id),model.corridors,[])&&!G.validPlacement(r,model.corridors,[])));
+      const collision=moving.some(r=>!G.validPlacement(r,others,[],model.settings)||
+        (G.validPlacement(drag.original.find(o=>o.id===r.id),model.corridors,[],model.settings)&&!G.validPlacement(r,model.corridors,[],model.settings)));
       if(collision){preview=null;drag.placement={message:'Release in a clear spot. Rooms can pass through rooms and corridors while dragging; this overlapping drop was canceled.'};}
       if(preview&&JSON.stringify(preview)!==JSON.stringify(model.rooms)){undo.push(drag.before);redo=[];model.rooms=preview;}
       status(drag.placement?.message||'Selection moved.');
@@ -913,7 +914,8 @@
     if(!groupValid(model.rooms,boundaries,model.corridors)){renderExclusionControls();status('That exclusion intersects a room or corridor. Move those spaces first; nothing was changed.');return;}
     checkpoint();model.boundaries=boundaries;render();status(next.exclusion.enabled?'Lower-right exclusion: '+fmt(next.exclusion.width)+' × '+fmt(next.exclusion.height)+' ft.':'Exclusion off. The full lower-right area is available.');
   }
-  function syncSettings(){$('#wallStyle').value=model.settings.wallStyle;$('#defaultThickness').value=model.settings.thickness;$('#exteriorThickness').value=model.settings.exteriorThickness??12;$('#boundarySnap').checked=model.settings.boundarySnap;$('#roomSnap').checked=model.settings.roomSnap;$('#snapDistance').value=model.settings.margin;}
+  function syncSettings(){$('#wallStyle').value=model.settings.wallStyle;$('#defaultThickness').value=model.settings.thickness;$('#exteriorThickness').value=model.settings.exteriorThickness??12;$('#boundarySnap').checked=model.settings.boundarySnap;$('#roomSnap').checked=model.settings.roomSnap;$('#solidWallSnap').value=model.settings.solidWallSnap||'middle';$('#snapDistance').value=model.settings.margin;}
+  $('#solidWallSnap').onchange=e=>{if(!['middle','outer','inner'].includes(e.target.value))return;checkpoint();model.settings.solidWallSnap=e.target.value;render();status('Solid wall snap: '+e.target.selectedOptions[0].textContent+'.');};
   [['#exteriorThickness','exteriorThickness'],['#defaultThickness','thickness'],['#boundarySnap','boundarySnap'],['#roomSnap','roomSnap'],['#snapDistance','margin']].forEach(([id,key])=>$(id).onchange=e=>{const value=e.target.type==='checkbox'?e.target.checked:Number(e.target.value);if(typeof value==='number'&&(!Number.isFinite(value)||value<0||(['thickness','exteriorThickness'].includes(key)&&(value<1||value>36)))){syncSettings();return;}checkpoint();model.settings[key]=value;render();});
   $('#wallStyle').onchange=e=>{checkpoint();model.settings.wallStyle=e.target.value;draw();};
   $('#corridorWidth').closest?.('label')?.insertAdjacentHTML('beforebegin','<label>New route type<select id="corridorPurpose"><option value="patient">Patient care / OR patient access · 8 ft</option><option value="staff">Staff / service access · 6 ft</option></select></label>');
@@ -949,7 +951,8 @@
     if(new Set(next.boundaries.map(b=>b.groupId)).size!==next.boundaries.length)throw Error('Only one boundary per group and one site boundary are supported.');
     // Layout conflicts are repairable, not malformed file data. Retain every
     // valid entity exactly where it was saved and flag it instead of rejecting.
-    next.settings.boundaryReview=!groupValid(next.rooms,next.boundaries,next.corridors);
+    next.settings.solidWallSnap=['middle','outer','inner'].includes(value.settings?.solidWallSnap)?value.settings.solidWallSnap:'middle';
+    next.settings.boundaryReview=!groupValid(next.rooms,next.boundaries,next.corridors,next.settings);
     if(value.doors!==undefined&&(!Array.isArray(value.doors)||value.doors.length>1500))throw Error('Use at most 1,500 hosted doors.');
     next.doors=(value.doors||[]).map(d=>{
       const id=cleanId(d.id),host=next.rooms.concat(next.corridors).find(e=>e.id===d.hostId);

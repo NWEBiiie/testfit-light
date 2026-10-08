@@ -109,7 +109,7 @@
       const points=poly.map(p=>({...p}));points[side]=a;points[j]=b;
       const clean=cleanedRoom(entity,points,side);if(!clean)return null;
       const next=clean.next,limits=boundaries.filter(b=>!b.groupId||b.groupId===entity.groupId);
-      if(next.width<2||next.depth<2||next.width>500||next.depth>500||!G.validBoundaryFit(next)||!G.validPlacement(next,others.filter(e=>e.type!=='corridor'),limits))return null;
+      if(next.width<2||next.depth<2||next.width>500||next.depth>500||!G.validBoundaryFit(next)||!G.validPlacement(next,others.filter(e=>e.type!=='corridor'),limits,options))return null;
       const paths=others.filter(e=>e.type==='corridor'),loss=r=>G.contourArea(G.roomFillContours(r,[],boundaries))-G.contourArea(G.roomFillContours(r,paths,boundaries));
       if(loss(next)>loss(entity)+.0001)return null;
       return {...clean,entities:entities.map(e=>e.id===next.id?next:e),offset:amount,normal,changedIds:[entity.id],reshaped:true};
@@ -195,7 +195,7 @@
       if(broken||points.length>64||points.length<4||distance(points.at(-1).end,points[0].start)>.001||!G.simple(outline))return null;
       const next={...G.withManualOutline({...entity,shape:'custom'},outline),walls:styles};
       const others=entities.filter(e=>e.id!==entity.id),limits=boundaries.filter(b=>!b.groupId||b.groupId===entity.groupId);
-      if(next.width<2||next.depth<2||next.width>500||next.depth>500||!G.validBoundaryFit(next)||!G.validPlacement(next,others.filter(e=>e.type!=='corridor'),limits))return null;
+      if(next.width<2||next.depth<2||next.width>500||next.depth>500||!G.validBoundaryFit(next)||!G.validPlacement(next,others.filter(e=>e.type!=='corridor'),limits,options))return null;
       const corridors=others.filter(e=>e.type==='corridor'),loss=r=>G.contourArea(G.roomFillContours(r,[],boundaries))-G.contourArea(G.roomFillContours(r,corridors,boundaries));
       if(loss(next)>loss(entity)+.0001)return null;
       return {entities:entities.map(e=>e.id===next.id?next:e),offset:amount,normal:n,reference:{roomId:entity.id,side:movedSide},changedIds:[entity.id],sideMapping:{roomId:entity.id,edges:mapping},reshaped:true};
@@ -212,7 +212,7 @@
       const range=[t.edge.a,t.edge.b].map(p=>dot(sub(p,edge.a),u));
       if(Math.min(to*len,Math.max(...range))-Math.max(from*len,Math.min(...range))<.05)continue;
       const spec=entity.walls?.[side],at=(from+to)/2,finish=(spec?.segments||[]).filter(s=>s.from<=at&&s.to>=at).sort((a,b)=>(b.revision||0)-(a.revision||0))[0]||spec;
-      const sourceOffset=G.snapFaceOffset(entity,side,at),targetOffset=t.kind==='neighbor'?G.snapFaceOffset(t.neighbor,t.edge.index):0,special=['curtain','opening','window'].includes(finish?.kind)||t.kind==='neighbor'&&['curtain','opening','window'].includes(G.faceStyle(t.neighbor,t.edge.index).kind);
+      const sourceOffset=G.snapFaceOffset(entity,side,at,6,options.solidWallSnap),targetOffset=t.kind==='neighbor'?G.snapFaceOffset(t.neighbor,t.edge.index,.5,6,options.solidWallSnap):0,special=['middle','outer','inner'].includes(options.solidWallSnap)||['curtain','opening','window'].includes(finish?.kind)||t.kind==='neighbor'&&['curtain','opening','window'].includes(G.faceStyle(t.neighbor,t.edge.index).kind);
       const facing=t.neighbor?dot(n,G.inward(t.edge,polygon(t.neighbor))):1;
       const allowance=t.kind==='column'&&t.center?0:t.kind==='column'||t.kind==='corridor'||t.kind==='boundary'&&special?sourceOffset:t.kind==='neighbor'&&facing<-.99999?sourceOffset-targetOffset:special?sourceOffset+targetOffset:0;
       const snap=dot(sub(t.edge.a,edge.a),n)-allowance,cost=Math.abs(snap-result.offset);if(cost<=margin)candidates.push({...t,snap,cost});

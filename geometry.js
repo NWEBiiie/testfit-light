@@ -88,9 +88,9 @@
     }
     return null;
   }
-  function edgeGap(room,edge) {
-    if(edges(polygon(room)).some(e=>crosses(e.a,e.b,edge.a,edge.b)))return 0;
-    return Math.min(...edges(polygon(room)).flatMap(({a,b})=>[distance(a,closest(a,edge.a,edge.b)),distance(b,closest(b,edge.a,edge.b)),distance(edge.a,closest(edge.a,a,b)),distance(edge.b,closest(edge.b,a,b))]));
+  function edgeGap(room,edge,poly=polygon(room)) {
+    if(edges(poly).some(e=>crosses(e.a,e.b,edge.a,edge.b)))return 0;
+    return Math.min(...edges(poly).flatMap(({a,b})=>[distance(a,closest(a,edge.a,edge.b)),distance(b,closest(b,edge.a,edge.b)),distance(edge.a,closest(edge.a,a,b)),distance(edge.b,closest(edge.b,a,b))]));
   }
   function intersectLines(a,u,b,v) {
     const denominator=cross(u,v);
@@ -112,16 +112,17 @@
       return dot(d,original)>EPS&&(sides.includes(i)||Math.abs(cross(unit(d),unit(original)))<EPS);
     });
   }
-  function edgeFits(room,edge,boundary) {
+  function edgeFits(room,edge,boundary,options={}) {
     const base={...room,boundaryFit:null},points=polygon(base),count=points.length;
     const u=unit(sub(edge.b,edge.a)),normal=inward(edge,boundary),edgeLength=distance(edge.a,edge.b),target=area(points),fits=[];
     for(const side of edges(points)) {
       const i=side.index,j=(i+1)%count,gridNormal=inward(side,points);
       if(dot(gridNormal,normal)<Math.SQRT1_2-EPS)continue;
       // Extend the two neighboring grid walls to the boundary. Never rotate the grid.
-      const a=intersectLines(points[i],sub(points[i],points[(i+count-1)%count]),edge.a,u);
-      const b=intersectLines(points[j],sub(points[(j+1)%count],points[j]),edge.a,u);
-      if(!a||!b||[a,b].some(p=>dot(sub(p,edge.a),u)<-EPS||dot(sub(p,edge.a),u)>edgeLength+EPS))continue;
+      const line=add(edge.a,mul(normal,faceSnap(room,i,options)?snapFaceOffset(room,i,.5,6,options.solidWallSnap):0));
+      const a=intersectLines(points[i],sub(points[i],points[(i+count-1)%count]),line,u);
+      const b=intersectLines(points[j],sub(points[(j+1)%count],points[j]),line,u);
+      if(!a||!b||[a,b].some(p=>dot(sub(p,line),u)<-EPS||dot(sub(p,line),u)>edgeLength+EPS))continue;
       const fitted=points.map(p=>({...p}));fitted[i]=a;fitted[j]=b;
       for(const back of edges(points)) {
         const k=back.index,l=(k+1)%count;
@@ -132,7 +133,7 @@
         const shift=(target-current)/rate;
         const recovered=fitted.map((p,index)=>index===k||index===l?add(p,mul(gridNormal,shift)):p);
         const next={...base,boundaryFit:{side:i,points:recovered.map(p=>rotate(sub(p,base),-base.angle))}};
-        if(!validBoundaryFit(next)||!contains(recovered,boundary))continue;
+        if(!validBoundaryFit(next)||!contains(boundaryPlacementOutline(next,{points:boundary},options),boundary))continue;
         fits.push({room:next,cost:recovered.reduce((n,p,index)=>n+distance(p,points[index])**2,0)});
       }
     }
@@ -141,36 +142,40 @@
   function alignToEdge(room,edge,boundary) {
     return edgeFits(room,edge,boundary)[0]||null;
   }
-  function cornerFits(room,first,second,boundary) {
+  function cornerFits(room,first,second,boundary,options={}) {
     const base={...room,boundaryFit:null},points=polygon(base),count=points.length,target=area(points),fits=[];
     const winding=boundary.reduce((sum,p,i)=>sum+cross(p,boundary[(i+1)%boundary.length]),0);
     const cornerTurn=cross(sub(first.b,first.a),sub(second.b,second.a))*winding;
-    const corner=intersectLines(first.a,sub(first.b,first.a),second.a,sub(second.b,second.a));
-    if(!corner)return fits;
     for(let i=0;i<count;i++) {
       const j=(i+1)%count,k=(i+2)%count,previous=(i+count-1)%count,after=(k+1)%count;
       if(cross(sub(points[j],points[i]),sub(points[k],points[j]))*cornerTurn<=EPS)continue;
       for(const pair of [[first,second],[second,first]]) {
         if(pair.some((edge,index)=>dot(inward({a:points[(i+index)%count],b:points[(i+index+1)%count]},points),inward(edge,boundary))<.65))continue;
-        const a=intersectLines(points[i],sub(points[i],points[previous]),pair[0].a,sub(pair[0].b,pair[0].a));
-        const b=intersectLines(points[k],sub(points[after],points[k]),pair[1].a,sub(pair[1].b,pair[1].a));
+        const lines=pair.map((edge,index)=>{const side=(i+index)%count,shift=mul(inward(edge,boundary),faceSnap(room,side,options)?snapFaceOffset(room,side,.5,6,options.solidWallSnap):0);return {...edge,a:add(edge.a,shift),b:add(edge.b,shift)};});
+        const corner=intersectLines(lines[0].a,sub(lines[0].b,lines[0].a),lines[1].a,sub(lines[1].b,lines[1].a));if(!corner)continue;
+        const a=intersectLines(points[i],sub(points[i],points[previous]),lines[0].a,sub(lines[0].b,lines[0].a));
+        const b=intersectLines(points[k],sub(points[after],points[k]),lines[1].a,sub(lines[1].b,lines[1].a));
         if(!a||!b)continue;
         let fitted=points.map(p=>({...p}));fitted[i]=a;fitted[j]=corner;fitted[k]=b;
         const size=area(fitted);if(size<1)continue;
         // Scaling around the fixed corner preserves both contacts and every other grid direction.
         const factor=Math.sqrt(target/size);
         fitted=fitted.map(p=>add(corner,mul(sub(p,corner),factor)));
-        if(distance(fitted[i],closest(fitted[i],pair[0].a,pair[0].b))>EPS||distance(fitted[k],closest(fitted[k],pair[1].a,pair[1].b))>EPS)continue;
+        if(distance(fitted[i],closest(fitted[i],lines[0].a,lines[0].b))>EPS||distance(fitted[k],closest(fitted[k],lines[1].a,lines[1].b))>EPS)continue;
         const next={...base,boundaryFit:{side:i,sides:[i,j],points:fitted.map(p=>rotate(sub(p,base),-base.angle))}};
-        if(!validBoundaryFit(next)||!contains(fitted,boundary))continue;
+        if(!validBoundaryFit(next)||!contains(boundaryPlacementOutline(next,{points:boundary},options),boundary))continue;
         fits.push({room:next,cost:fitted.reduce((n,p,index)=>n+distance(p,points[index])**2,0)});
       }
     }
     return fits.sort((a,b)=>a.cost-b.cost).map(f=>f.room);
   }
-  function validPlacement(room,others,boundaries) {
+  function placementOutline(room,options={}){
     const poly=polygon(room);
-    return boundaries.every(b=>contains(boundaryPlacementOutline(room,b),b.points))&&!others.filter(o=>o.type!=='corridor').some(other=>overlaps(poly,polygon(other)))&&!corridorCuts(others.filter(o=>o.type==='corridor'),boundaries).some(c=>overlaps(poly,c));
+    return options.solidWallSnap==='inner'?offsetOutline(poly,edges(poly).map(e=>Math.max(0,sideSurfaceOffset(room,e.index,options)))):poly;
+  }
+  function validPlacement(room,others,boundaries,options={}) {
+    const poly=placementOutline(room,options);
+    return boundaries.every(b=>contains(boundaryPlacementOutline(room,b,options),b.points))&&!others.filter(o=>o.type!=='corridor').some(other=>overlaps(poly,placementOutline(other,options)))&&!corridorCuts(others.filter(o=>o.type==='corridor'),boundaries).some(c=>overlaps(poly,c));
   }
   function settlePrimary(room,others,boundaries,options={}) {
     const margin=options.margin??2;
@@ -185,16 +190,16 @@
         for(const c of near) {
           const d=near.find(other=>other.edge.index===(c.edge.index+1)%boundary.points.length);
           if(!d||Math.abs(cross(sub(c.edge.b,c.edge.a),sub(d.edge.b,d.edge.a))*winding)<=EPS)continue;
-          for(const next of cornerFits(room,c.edge,d.edge,boundary.points)) {
-            if(validPlacement(next,others,boundaries))return {room:next,aligned:true,corner:true,message:'Two-edge corner fit · '+boundary.name+' · room grid unchanged'};
+          for(const next of cornerFits(room,c.edge,d.edge,boundary.points,options)) {
+            if(validPlacement(next,others,boundaries,options))return {room:next,aligned:true,corner:true,message:'Two-edge corner fit · '+boundary.name+' · room grid unchanged'};
           }
         }
-        for(const c of near) for(const next of edgeFits(room,c.edge,c.boundary.points)) {
-          if(validPlacement(next,others,boundaries)) return {room:next,aligned:true,message:'Boundary wall fitted · '+c.boundary.name+' · room grid unchanged'};
+        for(const c of near) for(const next of edgeFits(room,c.edge,c.boundary.points,options)) {
+          if(validPlacement(next,others,boundaries,options)) return {room:next,aligned:true,message:'Boundary wall fitted · '+c.boundary.name+' · room grid unchanged'};
         }
       }
       // An unsatisfied boundary contact must not silently rotate the room to a neighbor.
-      if(candidates.length && validPlacement(original,others,boundaries)) return {room:original,message:'Kept position: both ends cannot fit here without overlap or an area change.'};
+      if(candidates.length && validPlacement(original,others,boundaries,options)) return {room:original,message:'Kept position: both ends cannot fit here without overlap or an area change.'};
     }
     if(options.roomSnap!==false) {
       let candidates=[];
@@ -205,7 +210,7 @@
           // Fit the facing wall to it while the remaining sides keep the room grid.
           const normal=mul(inward(edge,polygon(other)),-1),reach=2000;
           const freeSide=[edge.a,edge.b,add(edge.b,mul(normal,reach)),add(edge.a,mul(normal,reach))];
-          for(const fitted of edgeFits(room,edge,freeSide))if(validPlacement(fitted,others,boundaries))
+          for(const fitted of edgeFits(room,edge,freeSide,options))if(validPlacement(fitted,others,boundaries,options))
             candidates.push({room:fitted,aligned:true,move:distance(room,fitted),message:'Fitted to corridor barrier · '+other.name+' · room grid unchanged'});
         }
         const next={...room};
@@ -219,14 +224,14 @@
           return Math.min(Math.max(...interval),distance(edge.a,edge.b))-Math.max(Math.min(...interval),0)>.1;
         });
         if(!contact)continue;
-        if(validPlacement(next,others,boundaries)) candidates.push({room:next,move:distance(room,next),message:'Joined wall with '+other.name});
+        if(validPlacement(next,others,boundaries,options)) candidates.push({room:next,move:distance(room,next),message:'Joined wall with '+other.name});
       }
       if(candidates.length) return candidates.sort((a,b)=>a.move-b.move)[0];
     }
-    if(validPlacement(room,others,boundaries)) return {room,message:'Room placed.'};
+    if(validPlacement(room,others,boundaries,options)) return {room,message:'Room placed.'};
     let next={...room};
     for(const boundary of boundaries) {next=fitInside(next,boundary.points);if(!next)break;}
-    if(next&&validPlacement(next,others,boundaries)) return {room:next,message:'Kept inside the boundary.'};
+    if(next&&validPlacement(next,others,boundaries,options)) return {room:next,message:'Kept inside the boundary.'};
     return {room:null,message:'Does not fit here. Rooms cannot overlap or cross an assigned boundary.'};
   }
   function corridorPoint(origin,point,mode='ortho') {
@@ -264,7 +269,7 @@
       const u=unit(sub(edge.b,edge.a)),normal=inward(edge,poly);
       const targets=columnSnapTargets(options);
       if(options.roomSnap!==false)for(const room of rooms){const rp=polygon(room);
-        for(const wall of wallNetwork([room])){const side=edges(rp)[wall.source.side],outward=mul(inward(side,rp),-1),half=['curtain','opening','window'].includes(wall.style.kind)?-surfaceOffset(wall.style):(wall.style.thickness||6)/24;
+        for(const wall of wallNetwork([room])){const side=edges(rp)[wall.source.side],outward=mul(inward(side,rp),-1),solidHalf=(wall.style.thickness||6)/24,half=['curtain','opening','window'].includes(wall.style.kind)?-surfaceOffset(wall.style):options.solidWallSnap==='middle'?0:options.solidWallSnap==='inner'?-solidHalf:solidHalf;
           targets.push({edge:{a:add(wall.a,mul(outward,half)),b:add(wall.b,mul(outward,half))},normal:outward,kind:'neighbor'});
         }
       }
@@ -316,15 +321,26 @@
     return edit?{...wall,...edit}:wall;
   }
   // Signed distance from wall axis to its visible outward snap face.
-  function snapFaceOffset(room,side,at=.5,fallback=6){const spec=faceStyle(room,side,at);return ['curtain','opening','window'].includes(spec.kind)?-surfaceOffset({...spec,thickness:faceThickness(room,side,at,fallback)}):faceThickness(room,side,at,fallback)/24;}
+  function snapFaceOffset(room,side,at=.5,fallback=6,mode){const spec=faceStyle(room,side,at),half=faceThickness(room,side,at,fallback)/24;return ['curtain','opening','window'].includes(spec.kind)?-surfaceOffset({...spec,thickness:half*24}):mode==='middle'?0:mode==='inner'?-half:half;}
+  function faceSnap(room,side,options={},at=.5){return ['curtain','opening','window'].includes(faceKind(room,side,at))||['middle','outer','inner'].includes(options.solidWallSnap);}
   const surfaceOffset=spec=>['curtain','opening','window'].includes(spec.kind)?(['curtain','opening'].includes(spec.kind)&&spec.face==='interior'?1:-1)*(spec.thickness||6)/24:0;
-  function boundaryPlacementOutline(room,boundary){
+  function sideSurfaceOffset(room,side,options={}){
+    const wall=room.walls?.[side]||{},cuts=[0,1,...(wall.segments||[]).flatMap(s=>[s.from,s.to])].sort((a,b)=>a-b);
+    const offsets=cuts.slice(1).flatMap((to,i)=>to-cuts[i]>EPS?[faceSnap(room,side,options,(to+cuts[i])/2)?-snapFaceOffset(room,side,(to+cuts[i])/2,6,options.solidWallSnap):0]:[]);
+    return offsets.length?Math.min(...offsets):0;
+  }
+  function boundarySnapGap(room,edge,options={}){
+    const poly=polygon(room);
+    // Detachment follows the visible single line, not its hidden axis. An
+    // interior axis can cross the shell even after the opening pulls away.
+    return edgeGap(room,edge,offsetOutline(poly,edges(poly).map(e=>sideSurfaceOffset(room,e.index,options))));
+  }
+  function boundaryPlacementOutline(room,boundary,options={}){
     const poly=polygon(room);
     // An inward single line can meet the shell while its invisible logical
     // axis lies outside. Keep solid walls bounded; retain existing shell hosts.
     return offsetOutline(poly,edges(poly).map(e=>{
-      const wall=room.walls?.[e.index]||{},cuts=[0,1,...(wall.segments||[]).flatMap(s=>[s.from,s.to])].sort((a,b)=>a-b);
-      const offsets=cuts.slice(1).flatMap((to,i)=>to-cuts[i]>EPS?[surfaceOffset(faceStyle(room,e.index,(to+cuts[i])/2))]:[]),offset=offsets.length?Math.min(...offsets):0;
+      const offset=sideSurfaceOffset(room,e.index,options);
       if(offset<=0)return 0;
       const shell=edges(boundary.points).some(f=>Math.abs(cross(unit(sub(e.b,e.a)),unit(sub(f.b,f.a))))<EPS&&[e.a,e.b].every(p=>distance(p,closest(p,f.a,f.b))<EPS));
       return shell?0:offset;
@@ -336,10 +352,10 @@
     const pieces=[offsetOutline(polygon(room),edges(polygon(room)).map(e=>{
       const shell=network.find(w=>w.shell&&w.owners.some(o=>o.side===e.index)&&Math.abs(w.length-distance(e.a,e.b))<1e-6);
       const spans=network.filter(w=>w.owners.some(o=>o.side===e.index)),offsets=spans.map(w=>surfaceOffset(w.style));
-      return shell?-distance(shell.a,shell.shell.a):offsets.length&&offsets.every(v=>Math.abs(v-offsets[0])<EPS)?offsets[0]:0;
+      return shell?-dot(sub(shell.a,shell.shell.a),inward(e,polygon(room))):offsets.length&&offsets.every(v=>Math.abs(v-offsets[0])<EPS)?offsets[0]:0;
     }))];
     for(const wall of network){
-      if(wall.shell){pieces.push([wall.a,wall.b,wall.shell.b,wall.shell.a]);continue;}
+      if(wall.shell){const inwardNormal=inward(edges(polygon(room))[wall.source.side],polygon(room));(dot(sub(wall.a,wall.shell.a),inwardNormal)<-EPS?insets:pieces).push([wall.a,wall.b,wall.shell.b,wall.shell.a]);continue;}
       if(!['curtain','opening','window'].includes(wall.style.kind))continue;
       const face=curtainFace(wall,[room]);
       (surfaceOffset(wall.style)>0?insets:pieces).push([wall.a,wall.b,face.b,face.a]);
@@ -378,8 +394,8 @@
     const matches=[];
     sides.forEach(side=>sources.forEach(source=>{
       const {normal,neighbor}=source,u=unit(sub(source.edge.b,source.edge.a));
-      const special=['curtain','opening','window'].includes(faceKind(room,side.index))||neighbor&&['curtain','opening','window'].includes(faceKind(neighbor,source.edge.index));
-      const allowance=neighbor?.type==='corridor'?snapFaceOffset(room,side.index)-(neighbor.snapClearances?.[source.edge.index]??neighbor.snapClearance??0):neighbor&&special?snapFaceOffset(room,side.index)+snapFaceOffset(neighbor,source.edge.index):!neighbor&&special?snapFaceOffset(room,side.index):0;
+      const special=faceSnap(room,side.index,options)||neighbor&&faceSnap(neighbor,source.edge.index,options),sourceOffset=snapFaceOffset(room,side.index,.5,6,options.solidWallSnap);
+      const allowance=neighbor?.type==='corridor'?sourceOffset-(neighbor.snapClearances?.[source.edge.index]??neighbor.snapClearance??0):neighbor&&special?sourceOffset+snapFaceOffset(neighbor,source.edge.index,.5,6,options.solidWallSnap):!neighbor&&special?sourceOffset:0;
       const edge={...source.edge,a:add(source.edge.a,mul(normal,allowance)),b:add(source.edge.b,mul(normal,allowance))};
       if(dot(inward(side,poly),normal)<.65)return;
       const interval=[side.a,side.b].map(p=>dot(sub(p,edge.a),u));
@@ -406,7 +422,7 @@
         for(const t of roots){
           const points=build(t);if(points.some(p=>!p))continue;
           const next={...room,boundaryFit:{side:first.side,sides:fittedSides,points:points.map(p=>rotate(sub(p,room),-room.angle))}};
-          if(!validBoundaryFit(next)||!validPlacement(next,others,boundaries))continue;
+          if(!validBoundaryFit(next)||!validPlacement(next,others,boundaries,options))continue;
           if(pair.some(m=>{const e=edges(points)[m.side],u=unit(sub(m.edge.b,m.edge.a)),span=[e.a,e.b].map(p=>dot(sub(p,m.edge.a),u));return Math.min(Math.max(...span),distance(m.edge.a,m.edge.b))-Math.max(0,Math.min(...span))<.05;}))continue;
           const cost=points.reduce((sum,p,i)=>sum+distance(p,poly[i])**2,0);
           candidates.push({room:next,cost,aligned:true,message:'Snapped two nearby edges · room grid and area preserved.'});
@@ -415,20 +431,26 @@
     }
     return candidates.sort((a,b)=>a.cost-b.cost)[0]||null;
   }
-  function corridorSnapBarrier(room,c){
-    const rp=polygon(room),cp=polygon(c),snapClearances=edges(cp).map(e=>{const n=mul(inward(e,cp),-1),side=edges(rp).find(f=>dot(inward(f,rp),n)>.99999);return side?snapFaceOffset(room,side.index):0;});
+  function corridorSnapBarrier(room,c,options={}){
+    const rp=polygon(room),cp=polygon(c),snapClearances=edges(cp).map(e=>{const n=mul(inward(e,cp),-1),side=edges(rp).find(f=>dot(inward(f,rp),n)>.99999);return side?snapFaceOffset(room,side.index,.5,6,options.solidWallSnap):0;});
     return {...c,outline:offsetOutline(cp,snapClearances.map(v=>-v)),snapClearances};
   }
   function settle(room,others,boundaries,options={}) {
     if(!options.corridorFaces){
 
-      others=others.map(c=>c.type==='corridor'?corridorSnapBarrier(room,c):c);
+      others=others.map(c=>c.type==='corridor'?corridorSnapBarrier(room,c,options):c);
       options={...options,corridorFaces:true};
     }
     if(room.boundaryFit?.manual){
       const snapped=snapSelection([room],others,boundaries,options);
       return snapped?{room:snapped.rooms[0],aligned:true,message:snapped.message}:
-        {room:validPlacement(room,others,boundaries)?room:null,message:'Manual wall shape retained.'};
+        {room:validPlacement(room,others,boundaries,options)?room:null,message:'Manual wall shape retained.'};
+    }
+    // Explicit solid references use a rigid face-to-line snap first. Do not
+    // reshape a parallel room to the axis and subsequently shift it again.
+    if(['middle','outer','inner'].includes(options.solidWallSnap)){
+      const snapped=snapSelection([room],others,boundaries,options);
+      if(snapped)return {room:snapped.rooms[0],aligned:true,message:snapped.message};
     }
     const result=settlePrimary(room,others,boundaries,options);
     if(!result.room)return result;
@@ -515,10 +537,10 @@
           if(overlap>margin||overlap < -margin||Math.min(...[side.a,side.b].flatMap(a=>[e.a,e.b].map(b=>distance(a,b))))>margin*Math.SQRT2+EPS)continue;
         }else if(overlap<.05)continue;
         const ends=continuation?[side.a,side.b].flatMap((a,i)=>[e.a,e.b].map((b,j)=>({i,j,gap:distance(a,b)}))).sort((a,b)=>a.gap-b.gap)[0]:null;
-        const sourceHalf=snapFaceOffset(room,side.index,ends?.i??.5,options.thickness);
-        const targetHalf=neighbor&&neighbor.type!=='corridor'?snapFaceOffset(neighbor,e.index,ends?.j??.5,options.thickness):0;
-        const sourceExterior=['curtain','opening','window'].includes(faceKind(room,side.index));
-        const targetExterior=neighbor&&['curtain','opening','window'].includes(faceKind(neighbor,e.index));
+        const sourceHalf=snapFaceOffset(room,side.index,ends?.i??.5,options.thickness,options.solidWallSnap);
+        const targetHalf=neighbor&&neighbor.type!=='corridor'?snapFaceOffset(neighbor,e.index,ends?.j??.5,options.thickness,options.solidWallSnap):0;
+        const sourceExterior=faceSnap(room,side.index,options);
+        const targetExterior=neighbor&&faceSnap(neighbor,e.index,options);
         // settle already offsets corridor barriers to the outside wall face.
         // Only apply the remaining allowance, never the wall thickness twice.
         const faceOffset=column?(options.columnSnapMode==='center'?0:-sourceHalf):continuation?sourceHalf-targetHalf:neighbor?.type==='corridor'? (neighbor.snapClearances?.[e.index]??neighbor.snapClearance??0)-sourceHalf:neighbor&&(sourceExterior||targetExterior)?-(sourceHalf+targetHalf):!neighbor&&sourceExterior?-sourceHalf:0;
@@ -536,7 +558,7 @@
     for(const delta of moves){
       if(length(delta)<.00001||length(delta)>margin*Math.SQRT2+EPS||existing.some(c=>Math.abs(dot(delta,c.n))>.001))continue;
       const moved=rooms.map(r=>({...r,x:r.x+delta.x,y:r.y+delta.y}));
-      if(!moved.every(r=>validPlacement(r,others.map(c=>c.type==='corridor'&&!c.snapClearances?corridorSnapBarrier(r,c):c),boundaries.filter(b=>!b.groupId||b.groupId===r.groupId))))continue;
+      if(!moved.every(r=>validPlacement(r,others.map(c=>c.type==='corridor'&&!c.snapClearances?corridorSnapBarrier(r,c,options):c),boundaries.filter(b=>!b.groupId||b.groupId===r.groupId),options)))continue;
       const contacts=matches.filter(c=>{
         if(Math.abs(c.gap+dot(delta,c.n))>=.001)return false;
         const u=unit(sub(c.e.b,c.e.a)),span=[c.side.a,c.side.b].map(p=>dot(sub(add(p,delta),c.e.a),u)),overlap=Math.min(Math.max(...span),distance(c.e.a,c.e.b))-Math.max(0,Math.min(...span));
@@ -576,18 +598,18 @@
     if(!result.every((r,i)=>validBoundaryFit(r)&&validPlacement(r,others.concat(result.filter((_,j)=>j!==i)),boundaries.filter(b=>!b.groupId||b.groupId===r.groupId))))return null;
     return result;
   }
-  function alignRoomEdges(rooms,others,boundaries,side=0,defaultThickness=6) {
+  function alignRoomEdges(rooms,others,boundaries,side=0,defaultThickness=6,options={}) {
     if(rooms.length<2||!Number.isInteger(side)||side<0||side>3)return null;
     // Explicit alignment references the first picked room and only translates.
     // It never changes room area, shape, order, or tangential location.
     const edgeFor=room=>{const poly=polygon(room),direction=rotate([{x:0,y:-1},{x:1,y:0},{x:0,y:1},{x:-1,y:0}][side],room.angle);
       return edges(poly).filter(e=>dot(mul(inward(e,poly),-1),direction)>.65).sort((a,b)=>dot(b.a,direction)-dot(a.a,direction))[0];};
     const first=rooms[0],reference=edgeFor(first);if(!reference)return null;
-    const n=mul(inward(reference,polygon(first)),-1),target=dot(reference.a,n)+snapFaceOffset(first,reference.index,.5,defaultThickness);
+    const n=mul(inward(reference,polygon(first)),-1),target=dot(reference.a,n)+snapFaceOffset(first,reference.index,.5,defaultThickness,options.solidWallSnap);
     const result=[];
     for(const room of rooms){
       const edge=edgeFor(room);if(!edge||dot(mul(inward(edge,polygon(room)),-1),n)<.99999)return null;
-      const shift=target-dot(edge.a,n)-snapFaceOffset(room,edge.index,.5,defaultThickness);
+      const shift=target-dot(edge.a,n)-snapFaceOffset(room,edge.index,.5,defaultThickness,options.solidWallSnap);
       if(room.locked&&Math.abs(shift)>.00001)return null;
       const delta=mul(n,shift),next={...room,x:room.x+delta.x,y:room.y+delta.y};
       // Boundary-fitted walls must stay attached rather than sliding off the shell.
@@ -597,7 +619,7 @@
       }
       result.push(next);
     }
-    return result.every((r,i)=>validPlacement(r,others.concat(result.filter((_,j)=>j!==i)),boundaries.filter(b=>!b.groupId||b.groupId===r.groupId)))?result:null;
+    return result.every((r,i)=>validPlacement(r,others.concat(result.filter((_,j)=>j!==i)),boundaries.filter(b=>!b.groupId||b.groupId===r.groupId),options))?result:null;
   }
   function contactEdges(rooms,others,boundaries) {
     const contacts=[];
@@ -617,19 +639,19 @@
     // An imported room may already be outside. Let it travel back in without
     // requiring every intermediate frame to be contained. Re-evaluate on the
     // next drag so a repaired room obeys the boundary normally again.
-    const limitsFor=room=>boundaries.filter(b=>(!b.groupId||b.groupId===room.groupId)&&(!options.recoverOutside||contains(polygon((options.releaseRooms||rooms).find(r=>r.id===room.id)||room),b.points)));
+    const limitsFor=room=>boundaries.filter(b=>(!b.groupId||b.groupId===room.groupId)&&(!options.recoverOutside||contains(boundaryPlacementOutline((options.releaseRooms||rooms).find(r=>r.id===room.id)||room,b,options),b.points)));
     const corridors=others.filter(r=>r.type==='corridor');
     const cuts=corridorCuts(corridors,boundaries);
     const shapes=rooms.map(room=>{const poly=polygon(room),half=Math.max(0,...(room.walls||[]).map(w=>w.kind==='opening'||w.kind==='curtain'?0:(w.thickness||6)/24)),clearCuts=cuts.map(c=>offsetOutline(c,-half));return {room,poly,clearCuts,clipped:clearCuts.some(c=>overlaps(poly,c)),boundaries:limitsFor(room)};});
     const neighbors=others.filter(r=>r.type!=='corridor'),obstacles=neighbors.map(polygon).concat(cuts);
     const valid=offset=>shapes.every(({room,poly,clipped,clearCuts,boundaries:limits})=>{
       const moved=poly.map(p=>add(p,offset));
-      if(!limits.every(b=>contains(boundaryPlacementOutline({...room,x:room.x+offset.x,y:room.y+offset.y},b),b.points)))return false;
+      if(!limits.every(b=>contains(boundaryPlacementOutline({...room,x:room.x+offset.x,y:room.y+offset.y},b,options),b.points)))return false;
       // A room already cut by a corridor moves as a base outline; its visible
       // footprint is re-cut at every location. Opposing fragments cannot cage it.
       // Uncut rooms still stop at the void, including merged connector gaps.
       if(!options.ghostCorridors&&!clipped&&clearCuts.some(c=>overlaps(moved,c)))return false;
-      return options.ghostRooms||!neighbors.some(other=>overlaps(moved,polygon(other)));
+      return options.ghostRooms||!neighbors.some(other=>overlaps(placementOutline({...room,x:room.x+offset.x,y:room.y+offset.y},options),placementOutline(other,options)));
     });
     // Sweep to contact instead of showing an overlap then rejecting the whole drag.
     function trace(start,motion) {
@@ -667,13 +689,13 @@
     if(moved.length===1) {
       const room=moved[0],limits=limitsFor(room).sort((a,b)=>Number(!!b.groupId)-Number(!!a.groupId));
       const fitted=settle(room,others,limits,options);
-      // A drag must be able to detach an initial contact. Boundary fitting can
-      // otherwise keep stretching a small room back to that wall at every frame.
+      // A drag must be able to move away from an initial or nearby contact.
+      // Otherwise each small frame can magnetize it back toward the shell.
       const origin=(options.releaseRooms||rooms).find(r=>r.id===room.id)||rooms[0];
       const sourceEdges=limits.flatMap(b=>edges(b.points));
       const retreats=fitted.room&&sourceEdges.some(edge=>{
-        const startGap=edgeGap(origin,edge),freeGap=edgeGap(room,edge);
-        return startGap<.02&&freeGap>startGap+.001&&edgeGap(fitted.room,edge)<freeGap-.001;
+        const startGap=boundarySnapGap(origin,edge,options),freeGap=boundarySnapGap(room,edge,options);
+        return startGap<=(options.margin??2)+EPS&&freeGap>startGap+.001&&boundarySnapGap(fitted.room,edge,options)<freeGap-.001;
       });
       // Keep the live contact position if reshaping cannot fit. Never bounce to drag-start.
       if(fitted.room&&!retreats){moved=[fitted.room];message=fitted.aligned||fitted.move!==undefined?fitted.message:message;}
@@ -772,7 +794,7 @@
         if(!noAccess&&!['wall','door'].includes(w.style.kind))continue;
         if(Math.abs(cross(u,unit(sub(e.b,e.a))))>1e-6)continue;
         const n=inward(e,site.points),gap=dot(sub(w.a,e.a),n);
-        if(gap< -1e-6||gap>half+1e-6)continue;
+        if(gap< -half-1e-6||gap>half+1e-6)continue;
         if(!w.owners.every(o=>{const r=rooms.find(r=>r.id===o.roomId);return r&&dot(inward({a:o.a,b:o.b},polygon(r)),n)>.99999;}))continue;
         const span=[e.a,e.b].map(p=>dot(sub(p,w.a),u)),lo=Math.max(0,Math.min(...span)),hi=Math.min(len,Math.max(...span));
         if(hi-lo>1e-6)contacts.push({lo,hi,n,gap,noAccess});
@@ -833,7 +855,7 @@
       const rooms=result.filter(e=>e.type!=='corridor'),paths=result.filter(e=>e.type==='corridor');
       for(const e of result.filter(r=>changed.has(r.id))){
         if(e.type==='corridor'){if(!validCorridor(e,rooms,boundaries))return null;continue;}
-        if(e.width<2||e.depth<2||e.width>500||e.depth>500||!validBoundaryFit(e)||!validPlacement(e,rooms.filter(r=>r.id!==e.id),boundaries.filter(b=>!b.groupId||b.groupId===e.groupId)))return null;
+        if(e.width<2||e.depth<2||e.width>500||e.depth>500||!validBoundaryFit(e)||!validPlacement(e,rooms.filter(r=>r.id!==e.id),boundaries.filter(b=>!b.groupId||b.groupId===e.groupId),options))return null;
         const old=entities.find(r=>r.id===e.id);
         const fixedPaths=paths.filter(p=>!changed.has(p.id));
         const oldLoss=contourArea(roomFillContours(old,[],boundaries))-contourArea(roomFillContours(old,fixedPaths,boundaries));
@@ -847,16 +869,19 @@
     return result?{entities:result,offset:amount,normal,reference,changedIds:[...changed],limited:Math.abs(amount-offset)>.001}:
       {error:'That move crosses another room, the site, or a corridor, or makes a side too short.'};
   }
-  function fitWallToBoundary(entities,reference,target,boundaries=[]){
+  function fitWallToBoundary(entities,reference,target,boundaries=[],options={}){
     const entity=entities.find(e=>e.id===reference.roomId);
     if(!entity||entity.locked)return {error:'Select an unlocked room.'};
-    const poly=polygon(entity),side=reference.side,count=poly.length,j=(side+1)%count,prev=(side+count-1)%count,after=(j+1)%count,u=unit(sub(target.b,target.a));
+    const poly=polygon(entity),side=reference.side,count=poly.length,j=(side+1)%count,prev=(side+count-1)%count,after=(j+1)%count;
+    const host=boundaries.find(b=>edges(b.points).some(e=>distance(e.a,target.a)<EPS&&distance(e.b,target.b)<EPS));
+    if(host&&faceSnap(entity,side,options,reference.at??.5)){const delta=mul(inward(target,host.points),snapFaceOffset(entity,side,reference.at??.5,6,options.solidWallSnap));target={...target,a:add(target.a,delta),b:add(target.b,delta)};}
+    const u=unit(sub(target.b,target.a));
     const a=intersectLines(poly[prev],sub(poly[side],poly[prev]),target.a,u),b=intersectLines(poly[j],sub(poly[after],poly[j]),target.a,u);
     if(!a||!b||[a,b].some(p=>distance(p,closest(p,target.a,target.b))>.001))return {error:'Both ends must fit on the boundary edge.'};
     const points=poly.map(p=>({...p}));points[side]=a;points[j]=b;
     if(!simple(points)||edges(points).some(e=>distance(e.a,e.b)<.5))return {error:'Boundary fit makes a side too short.'};
     const next=withManualOutline(entity,points),others=entities.filter(e=>e.id!==entity.id);
-    if(next.type==='corridor'?!validCorridor(next,others.filter(e=>e.type!=='corridor'),boundaries):next.width<2||next.depth<2||next.width>500||next.depth>500||!validBoundaryFit(next)||!validPlacement(next,others,boundaries.filter(b=>!b.groupId||b.groupId===next.groupId)))return {error:'Boundary fit would cross another space.'};
+    if(next.type==='corridor'?!validCorridor(next,others.filter(e=>e.type!=='corridor'),boundaries):next.width<2||next.depth<2||next.width>500||next.depth>500||!validBoundaryFit(next)||!validPlacement(next,others,boundaries.filter(b=>!b.groupId||b.groupId===next.groupId),options))return {error:'Boundary fit would cross another space.'};
     const normal=mul(inward(edges(poly)[side],poly),-1),offset=dot(sub(mul(add(a,b),.5),mul(add(poly[side],poly[j]),.5)),normal);
     return {entities:entities.map(e=>e.id===next.id?next:e),offset,normal,reference,changedIds:[entity.id],limited:false,reshaped:true};
   }
@@ -871,7 +896,8 @@
     if(options.roomSnap!==false)wallNetwork(entities,options.thickness??6).forEach(w=>{
       if(w.owners.some(o=>changed.has(o.roomId)))return;
       const owner=w.source,neighbor=entities.find(e=>e.id===owner.roomId),poly=polygon(neighbor);
-      targets.push({edge:{a:w.a,b:w.b},normal:mul(inward(edges(poly)[owner.side],poly),-1),thickness:w.style.thickness,faceOffset:['curtain','opening','window'].includes(w.style.kind)?-surfaceOffset(w.style):w.style.thickness/24,special:['curtain','opening','window'].includes(w.style.kind),kind:'neighbor'});
+      const at=dot(sub(mul(add(w.a,w.b),.5),owner.a),sub(owner.b,owner.a))/dot(sub(owner.b,owner.a),sub(owner.b,owner.a));
+      targets.push({edge:{a:w.a,b:w.b},normal:mul(inward(edges(poly)[owner.side],poly),-1),thickness:w.style.thickness,faceOffset:snapFaceOffset(neighbor,owner.side,at,options.thickness??6,options.solidWallSnap),special:faceSnap(neighbor,owner.side,options,at),kind:'neighbor'});
     });
     if(options.roomSnap!==false)corridorCuts(entities.filter(e=>e.type==='corridor'&&!changed.has(e.id)),boundaries).forEach(poly=>edges(poly).forEach(e=>targets.push({edge:e,normal:mul(inward(e,poly),-1),thickness:0,kind:'corridor'})));
     if(options.boundarySnap!==false)boundaries.filter(b=>!b.groupId||b.groupId===entity.groupId).forEach(b=>
@@ -887,14 +913,14 @@
       if(Math.abs(cross(u,unit(sub(e.b,e.a))))>EPS){
         if(target.kind==='boundary'&&base.changedIds.length===1&&dot(mul(n,-1),target.normal)>.65&&nearby(current,e,false)){
           const gap=Math.max(...[current.a,current.b].map(p=>Math.abs(dot(sub(p,e.a),target.normal))));
-          if(gap<=margin+EPS)candidates.push({...target,cost:gap,angled:true});
+          if(gap<=margin+EPS)candidates.push({...target,cost:gap,angled:true,sourceSpecial:faceSnap(entity,reference.side,options,reference.at??.5),sourceOffset:snapFaceOffset(entity,reference.side,reference.at??.5,options.thickness??6,options.solidWallSnap)});
         }
         continue;
       }
       const facing=dot(mul(n,-1),target.normal),continuation=target.kind==='neighbor'&&facing<-.99999;
       if(facing<.99999&&!continuation||!nearby(current,e,continuation))continue;
       const end=[current.a,current.b].map((a,i)=>({i,gap:Math.min(distance(a,e.a),distance(a,e.b))})).sort((a,b)=>a.gap-b.gap)[0].i;
-      const at=Number.isFinite(reference.at)?reference.at:end,sourceThickness=faceThickness(entity,reference.side,at,options.thickness??6),sourceOffset=snapFaceOffset(entity,reference.side,at,options.thickness??6),sourceSpecial=['curtain','opening','window'].includes(faceKind(entity,reference.side,at));
+      const at=Number.isFinite(reference.at)?reference.at:end,sourceThickness=faceThickness(entity,reference.side,at,options.thickness??6),sourceOffset=snapFaceOffset(entity,reference.side,at,options.thickness??6,options.solidWallSnap),sourceSpecial=faceSnap(entity,reference.side,options,at);
       // Same-facing adjacent walls align their outside faces, even if their
       // thickness differs. Opposing walls meet on one shared centerline.
       const faceOffset=target.kind==='column'&&target.center?0:target.kind==='corridor'||target.kind==='column'||target.kind==='boundary'&&sourceSpecial?-sourceOffset:continuation?(target.faceOffset-sourceOffset):target.kind==='neighbor'&&(sourceSpecial||target.special)?-sourceOffset-target.faceOffset:0;
@@ -903,11 +929,11 @@
     }
     candidates.sort((a,b)=>a.cost-b.cost);
     for(const candidate of candidates){
-      const result=candidate.angled?fitWallToBoundary(entities,reference,candidate.edge,boundaries):shiftWall(entities,reference,candidate.amount,boundaries,false,options);
+      const result=candidate.angled?fitWallToBoundary(entities,reference,candidate.edge,boundaries,options):shiftWall(entities,reference,candidate.amount,boundaries,false,options);
       if(result.error)continue;
-      const side=edges(polygon(result.entities.find(e=>e.id===entity.id)))[reference.side];
+      const fitted=result.entities.find(e=>e.id===entity.id),fittedPoly=polygon(fitted),side=edges(fittedPoly)[reference.side];
       if(!nearby(side,candidate.edge,candidate.continuation))continue;
-      const axis=unit(sub(side.b,side.a)),origin=add(side.a,mul(n,candidate.continuation||candidate.sourceSpecial?candidate.sourceOffset:0));
+      const axis=unit(sub(side.b,side.a)),faceNormal=mul(inward(side,fittedPoly),-1),origin=add(side.a,mul(faceNormal,candidate.continuation||candidate.sourceSpecial?candidate.sourceOffset:0));
       const span=[side.a,side.b,candidate.edge.a,candidate.edge.b].map(p=>dot(sub(p,origin),axis));
       return {...result,snapped:true,snapKind:candidate.kind,snapGuide:{a:add(origin,mul(axis,Math.min(...span)-.5)),b:add(origin,mul(axis,Math.max(...span)+.5))}};
     }
