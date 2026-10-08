@@ -170,7 +170,7 @@
   }
   function validPlacement(room,others,boundaries) {
     const poly=polygon(room);
-    return boundaries.every(b=>contains(poly,b.points))&&!others.filter(o=>o.type!=='corridor').some(other=>overlaps(poly,polygon(other)))&&!corridorCuts(others.filter(o=>o.type==='corridor'),boundaries).some(c=>overlaps(poly,c));
+    return boundaries.every(b=>contains(boundaryPlacementOutline(room,b),b.points))&&!others.filter(o=>o.type!=='corridor').some(other=>overlaps(poly,polygon(other)))&&!corridorCuts(others.filter(o=>o.type==='corridor'),boundaries).some(c=>overlaps(poly,c));
   }
   function settlePrimary(room,others,boundaries,options={}) {
     const margin=options.margin??2;
@@ -318,6 +318,18 @@
   // Signed distance from wall axis to its visible outward snap face.
   function snapFaceOffset(room,side,at=.5,fallback=6){const spec=faceStyle(room,side,at);return ['curtain','opening','window'].includes(spec.kind)?-surfaceOffset({...spec,thickness:faceThickness(room,side,at,fallback)}):faceThickness(room,side,at,fallback)/24;}
   const surfaceOffset=spec=>['curtain','opening','window'].includes(spec.kind)?(['curtain','opening'].includes(spec.kind)&&spec.face==='interior'?1:-1)*(spec.thickness||6)/24:0;
+  function boundaryPlacementOutline(room,boundary){
+    const poly=polygon(room);
+    // An inward single line can meet the shell while its invisible logical
+    // axis lies outside. Keep solid walls bounded; retain existing shell hosts.
+    return offsetOutline(poly,edges(poly).map(e=>{
+      const wall=room.walls?.[e.index]||{},cuts=[0,1,...(wall.segments||[]).flatMap(s=>[s.from,s.to])].sort((a,b)=>a-b);
+      const offsets=cuts.slice(1).flatMap((to,i)=>to-cuts[i]>EPS?[surfaceOffset(faceStyle(room,e.index,(to+cuts[i])/2))]:[]),offset=offsets.length?Math.min(...offsets):0;
+      if(offset<=0)return 0;
+      const shell=edges(boundary.points).some(f=>Math.abs(cross(unit(sub(e.b,e.a)),unit(sub(f.b,f.a))))<EPS&&[e.a,e.b].every(p=>distance(p,closest(p,f.a,f.b))<EPS));
+      return shell?0:offset;
+    }));
+  }
   function roomFillContours(room,corridors=[],boundaries=[]) {
     const network=wallNetwork([room],6,boundaries);
     const insets=[];
@@ -367,7 +379,7 @@
     sides.forEach(side=>sources.forEach(source=>{
       const {normal,neighbor}=source,u=unit(sub(source.edge.b,source.edge.a));
       const special=['curtain','opening','window'].includes(faceKind(room,side.index))||neighbor&&['curtain','opening','window'].includes(faceKind(neighbor,source.edge.index));
-      const allowance=neighbor?.type==='corridor'?snapFaceOffset(room,side.index)-(neighbor.snapClearances?.[source.edge.index]??neighbor.snapClearance??0):neighbor&&special?snapFaceOffset(room,side.index)+snapFaceOffset(neighbor,source.edge.index):0;
+      const allowance=neighbor?.type==='corridor'?snapFaceOffset(room,side.index)-(neighbor.snapClearances?.[source.edge.index]??neighbor.snapClearance??0):neighbor&&special?snapFaceOffset(room,side.index)+snapFaceOffset(neighbor,source.edge.index):!neighbor&&special?snapFaceOffset(room,side.index):0;
       const edge={...source.edge,a:add(source.edge.a,mul(normal,allowance)),b:add(source.edge.b,mul(normal,allowance))};
       if(dot(inward(side,poly),normal)<.65)return;
       const interval=[side.a,side.b].map(p=>dot(sub(p,edge.a),u));
@@ -509,7 +521,7 @@
         const targetExterior=neighbor&&['curtain','opening','window'].includes(faceKind(neighbor,e.index));
         // settle already offsets corridor barriers to the outside wall face.
         // Only apply the remaining allowance, never the wall thickness twice.
-        const faceOffset=column?(options.columnSnapMode==='center'?0:-sourceHalf):continuation?sourceHalf-targetHalf:neighbor?.type==='corridor'? (neighbor.snapClearances?.[e.index]??neighbor.snapClearance??0)-sourceHalf:neighbor&&(sourceExterior||targetExterior)?-(sourceHalf+targetHalf):0;
+        const faceOffset=column?(options.columnSnapMode==='center'?0:-sourceHalf):continuation?sourceHalf-targetHalf:neighbor?.type==='corridor'? (neighbor.snapClearances?.[e.index]??neighbor.snapClearance??0)-sourceHalf:neighbor&&(sourceExterior||targetExterior)?-(sourceHalf+targetHalf):!neighbor&&sourceExterior?-sourceHalf:0;
         const gap=dot(sub(side.a,e.a),n)+faceOffset;
         if(Math.abs(gap)<=margin+EPS)matches.push({n,gap,side,e,continuation});
       }
@@ -610,9 +622,9 @@
     const cuts=corridorCuts(corridors,boundaries);
     const shapes=rooms.map(room=>{const poly=polygon(room),half=Math.max(0,...(room.walls||[]).map(w=>w.kind==='opening'||w.kind==='curtain'?0:(w.thickness||6)/24)),clearCuts=cuts.map(c=>offsetOutline(c,-half));return {room,poly,clearCuts,clipped:clearCuts.some(c=>overlaps(poly,c)),boundaries:limitsFor(room)};});
     const neighbors=others.filter(r=>r.type!=='corridor'),obstacles=neighbors.map(polygon).concat(cuts);
-    const valid=offset=>shapes.every(({poly,clipped,clearCuts,boundaries:limits})=>{
+    const valid=offset=>shapes.every(({room,poly,clipped,clearCuts,boundaries:limits})=>{
       const moved=poly.map(p=>add(p,offset));
-      if(!limits.every(b=>contains(moved,b.points)))return false;
+      if(!limits.every(b=>contains(boundaryPlacementOutline({...room,x:room.x+offset.x,y:room.y+offset.y},b),b.points)))return false;
       // A room already cut by a corridor moves as a base outline; its visible
       // footprint is re-cut at every location. Opposing fragments cannot cage it.
       // Uncut rooms still stop at the void, including merged connector gaps.
@@ -885,7 +897,7 @@
       const at=Number.isFinite(reference.at)?reference.at:end,sourceThickness=faceThickness(entity,reference.side,at,options.thickness??6),sourceOffset=snapFaceOffset(entity,reference.side,at,options.thickness??6),sourceSpecial=['curtain','opening','window'].includes(faceKind(entity,reference.side,at));
       // Same-facing adjacent walls align their outside faces, even if their
       // thickness differs. Opposing walls meet on one shared centerline.
-      const faceOffset=target.kind==='column'&&target.center?0:target.kind==='corridor'||target.kind==='column'?-sourceOffset:continuation?(target.faceOffset-sourceOffset):target.kind==='neighbor'&&(sourceSpecial||target.special)?-sourceOffset-target.faceOffset:0;
+      const faceOffset=target.kind==='column'&&target.center?0:target.kind==='corridor'||target.kind==='column'||target.kind==='boundary'&&sourceSpecial?-sourceOffset:continuation?(target.faceOffset-sourceOffset):target.kind==='neighbor'&&(sourceSpecial||target.special)?-sourceOffset-target.faceOffset:0;
       const amount=dot(sub(e.a,original.a),n)+faceOffset,cost=Math.abs(amount-base.offset);
       if(cost<=margin+EPS)candidates.push({...target,amount,cost,continuation,sourceThickness,sourceOffset,sourceSpecial});
     }

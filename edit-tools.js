@@ -214,7 +214,7 @@
       const spec=entity.walls?.[side],at=(from+to)/2,finish=(spec?.segments||[]).filter(s=>s.from<=at&&s.to>=at).sort((a,b)=>(b.revision||0)-(a.revision||0))[0]||spec;
       const sourceOffset=G.snapFaceOffset(entity,side,at),targetOffset=t.kind==='neighbor'?G.snapFaceOffset(t.neighbor,t.edge.index):0,special=['curtain','opening','window'].includes(finish?.kind)||t.kind==='neighbor'&&['curtain','opening','window'].includes(G.faceStyle(t.neighbor,t.edge.index).kind);
       const facing=t.neighbor?dot(n,G.inward(t.edge,polygon(t.neighbor))):1;
-      const allowance=t.kind==='column'&&t.center?0:t.kind==='column'||t.kind==='corridor'?sourceOffset:t.kind==='neighbor'&&facing<-.99999?sourceOffset-targetOffset:special?sourceOffset+targetOffset:0;
+      const allowance=t.kind==='column'&&t.center?0:t.kind==='column'||t.kind==='corridor'||t.kind==='boundary'&&special?sourceOffset:t.kind==='neighbor'&&facing<-.99999?sourceOffset-targetOffset:special?sourceOffset+targetOffset:0;
       const snap=dot(sub(t.edge.a,edge.a),n)-allowance,cost=Math.abs(snap-result.offset);if(cost<=margin)candidates.push({...t,snap,cost});
     }
     for(const c of candidates.sort((a,b)=>a.cost-b.cost)){const snap=attempt(c.snap);if(snap&&snap.reshaped)return {...snap,snapped:true,snapKind:c.kind,snapGuide:c.edge};}

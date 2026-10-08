@@ -3,8 +3,7 @@
   'use strict';
   const G=window.LightGeometry,H=window.LightDoors,E=window.LightEdit,$=s=>document.querySelector(s),plan=$('#plan');
   const copy=x=>JSON.parse(JSON.stringify(x)),esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const palette=['#c7d8ed','#d1e3d9','#e9d6bb','#dcd5ed','#ead0d2'];
-  let model,selected=new Set(),selectedWall=null,selectedDoor=null,doorPlacement=null,activeGroup=null,activeCorridor=null,drawing=null,stoppedDrawing=null,drag=null,preview=null,wallPreview=null;
+  let model,selected=new Set(),selectedWall=null,selectedDoor=null,doorPlacement=null,numbering=null,activeGroup=null,activeCorridor=null,drawing=null,stoppedDrawing=null,drag=null,preview=null,wallPreview=null;
   let isolatedRoom=null,wallExtension=null,selectedCorridorSide=null;
   let completedRoomClick=null,handledDoubleClickUntil=0;
   let walls=[],doorViews=[],undo=[],redo=[],view={x:32,y:22,zoom:10},size={width:900,height:600};
@@ -44,23 +43,59 @@
     // Use the live colored footprint, including corridor cutouts, on the room grid.
     // User-entered names are quoted and protected against spreadsheet formulas.
     const cell=value=>{let s=String(value??'');if(/^[\s]*[=+\-@]/.test(s))s="'"+s;return '"'+s.replace(/"/g,'""')+'"';};
-    const rows=[['Room ID','Room name','Group','Hatch area (sf)','Dimensions A x B (ft-in)','A (ft-in)','B (ft-in)','Dimension basis','Area basis']];
+    const rows=[['Room number','Room name','Group','Hatch area (sf)','Dimensions A x B (ft-in)','A (ft-in)','B (ft-in)','Dimension basis','Area basis']];
     for(const room of model.rooms){
       const m=G.hatchMetrics(room,model.corridors,model.boundaries);
-      rows.push([room.id,room.name,getGroup(room.groupId)?.name||'',roundArea(m.area),dimensionPair(m),fmtLength(m.width),fmtLength(m.depth),m.area<=.00001?'No visible hatch':approximateDimensions(m)?'Approximate overall hatch extents along room grid; A x B is not net area':'Rectangular clear hatch; dimensions rounded to nearest inch','Net hatch; walls and corridor cuts excluded; rounded to 0.5 sf']);
+      rows.push([room.number||'',room.name,getGroup(room.groupId)?.name||'',roundArea(m.area),dimensionPair(m),fmtLength(m.width),fmtLength(m.depth),m.area<=.00001?'No visible hatch':approximateDimensions(m)?'Approximate overall hatch extents along room grid; A x B is not net area':'Rectangular clear hatch; dimensions rounded to nearest inch','Net hatch; walls and corridor cuts excluded; rounded to 0.5 sf']);
     }
     return '\uFEFF'+rows.map(row=>row.map(cell).join(',')).join('\r\n')+'\r\n';
   }
   const status=text=>$('#status').textContent=text;
   function checkpoint(){undo.push(copy(model));if(undo.length>60)undo.shift();redo=[];}
-  function newRoom(name,width,depth,shape='rect',angle=0){return {id:model.nextId++,name,width,depth,shape,angle,x:0,y:0,color:palette[model.rooms.length%palette.length],groupId:null,locked:false,walls:Array.from({length:shape==='l'?6:4},()=>({kind:'wall',thickness:model.settings.thickness,revision:0,segments:[]}))};}
+  function incrementRoomNumber(value){
+    const match=String(value).match(/^(.*?)(\d+)$/);
+    if(!match)throw Error('Start number must end in a digit, e.g. 101 or A-001.');
+    const n=Number(match[2]);if(!Number.isSafeInteger(n)||n>=Number.MAX_SAFE_INTEGER)throw Error('Room number is too large.');
+    return match[1]+String(n+1).padStart(match[2].length,'0');
+  }
+  function setRoomNumber(room,value){
+    const number=String(value).trim().slice(0,32);
+    if(model.rooms.some(r=>r.id!==room.id&&number&&r.number===number)){status('Room number already used.');render();return false;}
+    if((room.number||'')===number)return true;
+    checkpoint();room.number=number;render();status('Room number updated.');return true;
+  }
+  function beginNumbering(){
+    if(numbering){numbering=null;render();status('Numbering stopped.');return;}
+    const next=$('#numberStart').value.trim();
+    try{incrementRoomNumber(next);}catch(error){status(error.message);return;}
+    numbering={next,visited:new Set()};doorPlacement=drawing=drag=preview=wallPreview=null;isolatedRoom=wallExtension=selectedCorridorSide=null;
+    selectedWall=selectedDoor=activeCorridor=activeGroup=null;completedRoomClick=null;
+    render();plan.focus({preventScroll:true});status('Click rooms in order · Escape to stop.');
+  }
+  function numberRoom(id){
+    const room=getRoom(id);if(!room||!numbering||numbering.visited.has(id))return;
+    let number=numbering.next;
+    try{
+      while(model.rooms.some(r=>r.id!==id&&r.number===number))number=incrementRoomNumber(number);
+      const next=incrementRoomNumber(number);
+      if(!setRoomNumber(room,number))return;
+      numbering.visited.add(id);numbering.next=next;selected=new Set([id]);render();status('Next: '+next);
+    }catch(error){status(error.message);}
+  }
+  function renderNumbering(){
+    $('#renumberRooms').textContent=numbering?'Stop renumbering':'Renumber · click rooms';
+    $('#renumberRooms').classList.toggle('active',!!numbering);
+    $('#renumberRooms').setAttribute('aria-pressed',String(!!numbering));
+    $('#numberStart').disabled=!!numbering;
+  }
+  function newRoom(name,width,depth,shape='rect',angle=0){return {id:model.nextId++,name,width,depth,shape,angle,x:0,y:0,number:'',color:'#ffffff',groupId:null,locked:false,walls:Array.from({length:shape==='l'?6:4},()=>({kind:'wall',thickness:model.settings.thickness,revision:0,segments:[]}))};}
   function sample(variant){
     variant=variant||window.location?.search?.match(/[?&]layout=(advice1|advice2|advice3|previous|points|saved|boundary)(?:&|$)/)?.[1]||'advice1';
     model=H.migrate(window.LightSeptemberStudies?.models[variant]?copy(window.LightSeptemberStudies.models[variant]):variant==='boundary'?copy(window.LightBoundaryStudy):window.createLightPhotoProject(G,variant));
     model.settings.exteriorThickness??=12;
     const site=model.boundaries.find(b=>!b.groupId);if($('#boundaryPoints')&&site){$('#boundaryPoints').value=JSON.stringify({points:site.points},null,2);clearBoundaryImport();}
-    activeCorridor=null;selected=new Set(model.rooms.length?[model.rooms[0].id]:[]);selectedWall=selectedDoor=null;activeGroup=null;isolatedRoom=wallExtension=selectedCorridorSide=null;doorPlacement=drawing=stoppedDrawing=drag=preview=wallPreview=null;
-    render();fit();status(model.reference.title+' · Save each option before editing.');
+    activeCorridor=null;selected=new Set(model.rooms.length?[model.rooms[0].id]:[]);selectedWall=selectedDoor=null;activeGroup=null;isolatedRoom=wallExtension=selectedCorridorSide=null;numbering=doorPlacement=drawing=stoppedDrawing=drag=preview=wallPreview=null;
+    render();fit();status('Ready.');
   }
   function screen(point){return {x:(point.x-view.x)*view.zoom+size.width/2,y:(point.y-view.y)*view.zoom+size.height/2};}
   function world(event){const rect=plan.getBoundingClientRect();return {x:(event.clientX-rect.left-size.width/2)/view.zoom+view.x,y:(event.clientY-rect.top-size.height/2)/view.zoom+view.y};}
@@ -121,6 +156,7 @@
   }
   function exitIsolation(){isolatedRoom=wallExtension=null;render();status('Isolation ended. Shared-wall editing restored.');}
   function onPlanDoubleClick(event){
+    if(numbering||doorPlacement)return;
     if(drawing||doorPlacement||drag||Date.now()<handledDoubleClickUntil)return;
     const wallId=event.target.closest('[data-wall]')?.dataset.wall;
     const wall=walls.find(w=>w.id===wallId);
@@ -136,18 +172,6 @@
       svg+=`<path d="M${a.x} ${a.y}L${p.x+n.x*5} ${p.y+n.y*5} M${b.x} ${b.y}L${q.x+n.x*5} ${q.y+n.y*5} M${p.x} ${p.y}L${q.x} ${q.y} M${p.x-tick.x} ${p.y-tick.y}L${p.x+tick.x} ${p.y+tick.y} M${q.x-tick.x} ${q.y-tick.y}L${q.x+tick.x} ${q.y+tick.y}" fill="none" stroke="#2765a6" stroke-width="1"/><text transform="translate(${mid.x} ${mid.y}) rotate(${angle})" y="-5" text-anchor="middle" font-family="Arial" font-size="13" fill="#235bb7" stroke="#fff" stroke-width="4" paint-order="stroke">${esc(fmtLength(G.distance(edge.a,edge.b)))}</text>`;
     }
     return svg+'</g>';
-  }
-  function addExtensionControls(wall,owner,edge){
-    const length=G.distance(edge.a,edge.b),u=G.unit(G.sub(edge.b,edge.a)),span=[wall.a,wall.b].map(p=>G.dot(G.sub(p,edge.a),u));
-    const part=wallExtension?.roomId===owner.roomId&&wallExtension.side===owner.side?wallExtension:null;
-    const from=part?part.from*length:Math.max(0,Math.min(...span)),to=part?part.to*length:Math.min(length,Math.max(...span));
-    $('#inspector').insertAdjacentHTML('afterbegin',`<section class="extension-controls"><h3>Extend part of this wall</h3><div class="two">${input('extendStart','Start from A · ft',Number(from.toFixed(3)),`type="number" min="0" max="${length}" step="0.25"`)}${input('extendEnd','End from A · ft',Number(to.toFixed(3)),`type="number" min="0" max="${length}" step="0.25"`)}</div><button id="armExtension" class="${part?'active':'primary'} wide">${part?'Portion ready · drag wall':'Extend only this portion'}</button><p class="hint">Adds a step / L-shape. The rest of this side and neighboring rooms stay fixed. Escape cancels.</p></section>`);
-    $('#armExtension').onclick=()=>{
-      let from=Number($('#extendStart').value)/length,to=Number($('#extendEnd').value)/length;
-      if(Math.abs(from)<.0001)from=0;if(Math.abs(to-1)<.0001)to=1;
-      if(!Number.isFinite(from)||!Number.isFinite(to)||from<0||to>1||to<=from){status('Choose a start and end within this wall.');return;}
-      wallExtension={roomId:owner.roomId,side:owner.side,from,to};isolatedRoom=owner.roomId;render();status('Drag this wall’s handle to extend the selected portion, or enter a shift distance below.');
-    };
   }
   function drawCorridorEdges(c){
     let svg=G.edges(G.polygon(c)).map(e=>line(e.a,e.b,`class="corridor-edge-hit" data-corridor-edge="${e.index}" stroke="transparent" stroke-width="14" style="cursor:move"`)).join('');
@@ -197,7 +221,7 @@
     draw();status((source.outline?'Custom corridor edge adjusted':drag.reference.end!==undefined?'Corridor end extended / shortened':'Corridor segment moved · width fixed')+(drag.result.snapped?' · snapped to '+(snapped.snapKind==='column'?(model.settings.columnSnapMode==='center'?'column centerline · projection allowed':'column face · kept outside corridor'):'parallel wall face'):t<.999?' · stopped at boundary or minimum segment length':'')+'.');
   }
   function addCorridorEdgeControls(c){
-    $('#inspector').insertAdjacentHTML('beforeend','<p class="hint">Click the interior to select only. Drag an edge or white square to adjust that segment; blue circles extend or shorten the ends. Width stays fixed. The whole corridor cannot be dragged.</p>');
+    $('#inspector').insertAdjacentHTML('beforeend','');
   }
   function updateMarquee(p){
     if(drag?.kind!=='marquee')return;drag.end=p;drag.moved=drag.moved||G.distance(drag.start,p)*view.zoom>4;
@@ -265,13 +289,13 @@
       if(!contours.length&&selected.has(room.id))contours=[G.polygon(room)];
       if(!contours.length)return;
       const points=[...contours].sort((a,b)=>G.area(b)-G.area(a))[0],center=screen(G.centroid(points)),outline=contours.map(path).join(' '),netArea=displayArea(room);
-      svg+=`<path class="room-hit ${room.locked?'locked':''}" data-room="${room.id}" d="${outline}" fill-rule="evenodd" fill="${room.color}" fill-opacity="${isolatedRoom&&isolatedRoom!==room.id ? .2 : (selected.has(room.id)||drag?.hits?.includes(room.id)) ? .85 : .55}" stroke="${selected.has(room.id)?'#2e6abc':'none'}" stroke-width="6" stroke-opacity=".18"><title>${esc(room.name)} · ${fmtArea(netArea)} sf${room.locked?' · locked':''}</title></path>`;
+      svg+=`<path class="room-hit ${room.locked?'locked':''}" data-room="${room.id}" d="${outline}" fill-rule="evenodd" fill="${room.color}" fill-opacity="${isolatedRoom&&isolatedRoom!==room.id ? .2 : room.color.toLowerCase()==='#ffffff'?1:(selected.has(room.id)||drag?.hits?.includes(room.id)) ? .85 : .55}" stroke="${selected.has(room.id)?'#2e6abc':'none'}" stroke-width="6" stroke-opacity=".18"><title>${esc(room.name)} · ${fmtArea(netArea)} sf${room.locked?' · locked':''}</title></path>`;
       if(selected.has(room.id)&&!selectedWall){
         const spacing=Math.max(1,Math.ceil(12/view.zoom))*view.zoom,anchor=screen(room);
         svg+=`<defs><pattern id="room-grid-${room.id}" width="${spacing}" height="${spacing}" patternUnits="userSpaceOnUse" patternTransform="translate(${anchor.x} ${anchor.y}) rotate(${room.angle})"><path d="M${spacing} 0 H0 V${spacing}" fill="none" stroke="#366296" stroke-width=".65" opacity=".23"/></pattern></defs><path d="${outline}" fill-rule="evenodd" fill="url(#room-grid-${room.id})" pointer-events="none"/>`;
       }
       const font=Math.max(8,Math.min(14,Math.min(room.width,room.depth)*view.zoom/6)),width=room.width*view.zoom,height=room.depth*view.zoom;
-      const labelBase=width<100&&room.shortLabel?room.shortLabel:room.name,limit=Math.max(2,Math.floor((width-6)/(font*.56)));
+      const labelBase=(room.number?room.number+' · ':'')+(width<100&&room.shortLabel?room.shortLabel:room.name),limit=Math.max(2,Math.floor((width-6)/(font*.56)));
       const label=labelBase.length>limit?labelBase.slice(0,limit-1)+'…':labelBase,showArea=height>font*3&&width>font*4;
       if(width>=16&&height>=12){
         svg+=`<defs><clipPath id="label-clip-${room.id}"><path clip-rule="evenodd" d="${outline}"/></clipPath></defs><g clip-path="url(#label-clip-${room.id})" pointer-events="none"><text x="${center.x}" y="${center.y+(showArea?-3:font*.35)}" text-anchor="middle" font-family="Arial" font-size="${font}" font-weight="600" fill="#263b53">${esc(label)}</text>${showArea?`<text x="${center.x}" y="${center.y+font+1}" text-anchor="middle" font-family="Arial" font-size="${font*.84}" fill="#60718a">${fmtArea(netArea)} sf${room.locked?' · fixed':''}</text>`:''}</g>`;
@@ -312,67 +336,56 @@
     $('#zoom').value=view.zoom;$('#zoomValue').textContent=Math.round(view.zoom*10)+'%';$('#scaleBar').style.width=10*view.zoom+'px';
     $('#wallCount').textContent=walls.filter(w=>w.owners.length>1).length+' shared wall segments';
   }
-  function render(){$('#addDoor').textContent=doorPlacement?'Stop adding doors':'＋ Add door';$('#addDoor').classList.toggle('active',!!doorPlacement);$('#addDoor').setAttribute('aria-pressed',String(!!doorPlacement));renderLists();draw();renderInspector();$('#undo').disabled=!undo.length;$('#redo').disabled=!redo.length;$('#finish').hidden=!drawing||!['poly','corridor'].includes(drawing.type);$('#finish').textContent=drawing?.type==='corridor'?'Stop drawing':'Finish boundary';$('#pathDrawingBar').hidden=drawing?.type!=='corridor';$('#corridorDirection').disabled=!!drawing;$('#pathDrawingHint').textContent=drawing?.drawMode==='free'?'Free angle · click end, then stop.':'90° corners · click end, then stop.';$('#resumeDrawing').hidden=!stoppedDrawing;$('#discardDraft').hidden=!stoppedDrawing;$('#cancel').hidden=!drawing;$('#undoPoint').hidden=!drawing||!['poly','corridor'].includes(drawing.type);}
+  function render(){renderNumbering();$('#addDoor').textContent=doorPlacement?'Stop adding doors':'＋ Add door';$('#addDoor').classList.toggle('active',!!doorPlacement);$('#addDoor').setAttribute('aria-pressed',String(!!doorPlacement));renderLists();draw();renderInspector();$('#undo').disabled=!undo.length;$('#redo').disabled=!redo.length;$('#finish').hidden=!drawing||!['poly','corridor'].includes(drawing.type);$('#finish').textContent=drawing?.type==='corridor'?'Stop drawing':'Finish boundary';$('#pathDrawingBar').hidden=drawing?.type!=='corridor';$('#corridorDirection').disabled=!!drawing;$('#pathDrawingHint').textContent=drawing?.drawMode==='free'?'Free angle · click end, then stop.':'90° corners · click end, then stop.';$('#resumeDrawing').hidden=!stoppedDrawing;$('#discardDraft').hidden=!stoppedDrawing;$('#cancel').hidden=!drawing;$('#undoPoint').hidden=!drawing||!['poly','corridor'].includes(drawing.type);}
   function validColumn(c){return c&&[c.x,c.y,c.width,c.depth].every(Number.isFinite)&&Math.abs(c.x)<=1e6&&Math.abs(c.y)<=1e6&&c.width>=.1&&c.width<=100&&c.depth>=.1&&c.depth<=100;}
   function renderColumns(){
-    const panel=$('#columnList');if(!panel)return;
-    $('#columnsEnabled').checked=model.settings.columnsEnabled!==false;$('#columnSnap').checked=model.settings.columnSnap!==false;
+    $('#columnsEnabled').checked=model.settings.columnsEnabled!==false;
+    $('#columnSnap').checked=model.settings.columnSnap!==false;
     $('#columnSnapMode').value=model.settings.columnSnapMode==='center'?'center':'face';
-    panel.innerHTML=(model.columns||[]).map(c=>`<div class="column-item"><label class="check"><input type="checkbox" data-column-id="${c.id}" data-column-field="enabled" ${c.enabled?'checked':''}>${esc(c.name)}</label><div class="two">${['x','y','width','depth'].map(field=>`<label>${{x:'Center X · ft',y:'Center Y · ft',width:'Width · ft',depth:'Depth · ft'}[field]}<input type="number" step="any" value="${c[field]}" aria-label="${esc(c.name)} ${field}" data-column-id="${c.id}" data-column-field="${field}"></label>`).join('')}</div><button type="button" class="text-button danger" data-delete-column="${c.id}">Remove ${esc(c.name)}</button></div>`).join('')||'<p class="hint">No columns placed. Enter their surveyed centers below; no structural locations are assumed.</p>';
+    $('#columnCount').textContent=(model.columns||[]).length;
   }
-  function renderStudyAdvice(){
-    const panel=$('#studyAdvice'),study=window.LightSeptemberStudies,note=study?.notes[model.reference?.variant];
-    if(!panel)return;panel.hidden=!note;if(!note){panel.innerHTML='';return;}
-    const accessReview=model.rooms.filter(r=>r.facadeAccessReview&&!model.doors.some(d=>d.hostId===r.id)).map(r=>r.name);
-    const categoryNames={plant:'MEP / chase',admin:'Administration',patient:'Patient care',support:'Support',public:'Public space',treatment:'Diagnostic / treatment'};
-    panel.innerHTML=`${model.boundaries.some(b=>b.noAccessFaces?.length)?'<p class="notice">Left + bottom facades: no exterior doors or passages. Patient arrival/discharge remain on the right.</p>':''}${accessReview.length?'<p class="notice warning">New service access required: '+esc(accessReview.join('; '))+'. Service access remains unresolved; no substitute route through patient spaces is assumed.</p>':''}<p class="study-summary">${esc(note.description)}</p><p class="hint">Original footprint targets: 3 × 400-sf ORs · ${note.visibleBays} × 120-sf bays · no PT / mobility · 170-sf meds. Bottom recess = arrival; top recess = discharge. Boundary = interior shell face: touching partitions are omitted, so actual clear areas can be larger than these targets. Room list and dimensions show the live hatch measurements.</p><p class="notice warning">${esc(note.tradeoff)} Waiting / public space: ${note.waiting} sf. Recesses narrow to 7.67 ft at entry and 6.83 ft at discharge; primary patient routes widen to at least 8 ft inside; any staff-only service routes are not stretcher routes. Capacity and accessibility are unverified.</p><details><summary>Compare current and earlier options</summary><p class="hint">Preset areas, not live values after editing. The revised default has compact stepped waiting, 12 bays and two patient doors per OR. Options 2 and 3 retain the earlier ten-bay program. The previous default is also preserved in the menu.</p>${Object.values(study.notes).map(n=>`<div class="study-comparison"><strong>${esc(n.title)}</strong><span>Waiting: ${n.waiting} sf<br>Direct curtain views: ${n.visibleBays} / ${n.visibleBays}</span></div>`).join('')}</details><details><summary>Client room colors</summary><div class="study-legend">${Object.entries(study.colors).map(([key,color])=>`<span><i style="background:${color}"></i>${categoryNames[key]}</span>`).join('')}</div></details><p class="hint">Design studies only: sightlines are geometric, not a staffing or visibility guarantee. Curtain privacy, OR equipment fit, clean/dirty separation, staff support and egress still require review.</p>`;
+  function renderClientPalette(){
+    const panel=$('#clientPalette');if(!panel)return;
+    const colors=window.LightSeptemberStudies?.colors||{plant:'#c8c8c8',admin:'#ebdaa9',patient:'#a4c3ce',support:'#b8ccad',public:'#b39ab8',treatment:'#d19ca6'};
+    const labels={plant:'MEP',admin:'Admin',patient:'Patient',support:'Support',public:'Public',treatment:'Treatment'};
+    panel.innerHTML='<span>Client colors</span>'+Object.entries(colors).map(([key,color])=>`<button type="button" data-client-color="${color}" title="${labels[key]}" aria-label="${labels[key]}" style="--chip:${color}" ${!selected.size?'disabled':''}></button>`).join('')+'<button type="button" data-client-color="#ffffff" title="White" aria-label="White" style="--chip:#ffffff" '+(!selected.size?'disabled':'')+'></button>';
   }
   function renderLists(){
-    if($('#layoutChoice'))$('#layoutChoice').value=model.reference?.variant||'';
-    if($('#layoutSummary'))$('#layoutSummary').textContent=model.reference?.title||'Custom plan';
-    renderStudyAdvice();
-    $('#projectNote').textContent=model.reference?.note||'';$('#projectNote').hidden=!model.reference;
-    $('#roomCount').textContent=model.rooms.length+' · '+fmtArea(model.rooms.reduce((n,r)=>n+displayArea(r),0))+' sf';
-    $('#roomList').innerHTML=model.rooms.length?model.rooms.map(r=>`<div class="room-row ${selected.has(r.id)?'active':''}"><input type="checkbox" data-pick="${r.id}" aria-label="Select ${esc(r.name)}" ${selected.has(r.id)?'checked':''}><i class="swatch" style="background:${r.color}"></i><button data-room="${r.id}"><div>${esc(r.name)}<span>${fmtArea(displayArea(r))} sf · ${esc(dimensionPair(hatchMetrics(r)))} clear${corridorLoss(r)>.01?" · cut by corridor":""}</span></div>${r.locked?'⌑':''}</button></div>`).join(''):'<p class="hint">No rooms yet. Add one above.</p>';
-    $('#makeGroup').disabled=selected.size<2;
-    $('#groupList').innerHTML=model.groups.map(g=>`<button class="group-button ${activeGroup===g.id?'active':''}" data-group="${g.id}">${esc(g.name)}<small>${groupRooms(g.id).length} rooms</small></button>`).join('')||'<p class="hint">Select two or more rooms to make a group.</p>';
-    $('#corridorList').innerHTML=model.corridors.map(c=>`<div class="corridor-row"><button class="side-button ${activeCorridor===c.id?'active':''}" data-corridor="${c.id}"><span>${esc(c.name)}</span><small>${c.outline?'Custom outline':fmtLength(c.width)+' wide'}</small></button><button class="danger corridor-delete" type="button" data-delete-corridor="${c.id}" aria-label="Delete ${esc(c.name)}" title="Delete corridor · Undo restores it">Delete</button></div>`).join('')||'<p class="hint">Click once per corner, then Stop drawing. The corridor forms a barrier and cuts back overlapping rooms.</p>';
+    renderClientPalette();
+    $('#projectNote').hidden=true;
+    $('#corridorList').innerHTML=model.corridors.map(c=>`<div class="corridor-row"><button class="side-button ${activeCorridor===c.id?'active':''}" data-corridor="${c.id}"><span>${esc(c.name)}</span><small>${c.outline?'Custom outline':fmtLength(c.width)+' wide'}</small></button><button class="danger corridor-delete" type="button" data-delete-corridor="${c.id}" aria-label="Delete ${esc(c.name)}" title="Delete corridor · Undo restores it">Delete</button></div>`).join('')||'';
     renderExclusionControls();renderColumns();
     $('#boundaryCount').textContent=model.boundaries.length;
-    $('#boundaryList').innerHTML=model.boundaries.map(b=>`<div class="boundary-item"><div><strong>${esc(b.name)}</strong><small>${fmt(G.area(b.points))} sf · ${b.groupId?'group':'site'}${b.noAccessFaces?.length?' · No access: '+esc(b.noAccessFaces.join(' + '))+' facade':''}</small></div><button data-remove-boundary="${b.id}" aria-label="Remove ${esc(b.name)}">×</button></div>`).join('')||'<p class="hint">Draw a site boundary above the plan.</p>';
+    $('#boundaryList').innerHTML=model.boundaries.map(b=>`<div class="boundary-item"><div><strong>${esc(b.name)}</strong><small>${fmt(G.area(b.points))} sf · ${b.groupId?'group':'site'}${b.noAccessFaces?.length?' · No access: '+esc(b.noAccessFaces.join(' + '))+' facade':''}</small></div><button data-remove-boundary="${b.id}" aria-label="Remove ${esc(b.name)}">×</button></div>`).join('')||'';
   }
   const input=(id,label,value,extra='')=>`<label>${label}<input id="${id}" value="${esc(value)}" ${extra}></label>`;
   function renderInspector(){
     const panel=$('#inspector'),room=one(),wall=walls.find(w=>w.id===selectedWall);
-    if(doorPlacement){$('#inspectorTitle').textContent='Door brush';panel.innerHTML='<div class="notice">Click any solid room wall or exposed corridor edge to add a door. Keep clicking to add more doors on the same wall or other rooms—no room selection needed. Doors swing inward, hinge toward the nearest perpendicular wall and leave six inches of corner clearance. Each door stays hosted on its wall. Undo removes one placement at a time.</div><button id="cancelDoorPlacement" class="wide">Stop adding doors · Escape</button>';$('#cancelDoorPlacement').onclick=beginDoorPlacement;return;}
+    if(numbering){$('#inspectorTitle').textContent='Room numbers';panel.innerHTML='<div class="notice">Next: '+esc(numbering.next)+'</div><button id="stopNumbering" class="wide">Stop · Escape</button>';$('#stopNumbering').onclick=beginNumbering;return;}
+    if(doorPlacement){$('#inspectorTitle').textContent='Door brush';panel.innerHTML='<div class="notice">Click walls to add doors.</div><button id="cancelDoorPlacement" class="wide">Stop adding doors · Escape</button>';$('#cancelDoorPlacement').onclick=beginDoorPlacement;return;}
     if(selectedDoor&&model.doors.some(d=>d.id===selectedDoor)){renderDoorInspector();return;}
     if(selectedWall&&wall){
       const spec=wall.style,owners=wall.owners.map(o=>getEntity(o.roomId)?.name).join(' + ');
       $('#inspectorTitle').textContent=wall.owners.length>1?'Shared wall':'Wall properties';
-      panel.innerHTML=`<div class="notice">${esc(owners)}${wall.noAccess?'<br>No-access exterior facade · fixed glazing allowed':''}<br>${fmtLength(wall.length)} · ${wall.owners.length>1?'One physical wall. Edits apply to both rooms.':'Select another side directly on the plan.'}</div><label>Wall type<select id="wallKind">${[['wall','Solid wall'],['curtain','Curtain · dashed'],['opening','Open passage'],['window','Window wall · mullions']].map(([v,l])=>`<option value="${v}" ${v===spec.kind?'selected':''}>${l}</option>`).join('')}</select></label>${['curtain','opening'].includes(spec.kind)?`<label>Curtain / passage face<select id="wallFace"><option value="exterior" ${spec.face!=='interior'?'selected':''}>Exterior face · current behavior</option><option value="interior" ${spec.face==='interior'?'selected':''}>Interior face · inside room</option></select></label>`:''}${input('wallThickness','Thickness · inches',spec.thickness,'type="number" min="1" max="36" step="0.5"')}<button id="addHostedDoor" class="primary wide" ${spec.kind!=='wall'||wall.noAccess?'disabled':''}>＋ Add door to wall</button><p class="hint">Doors are independent inserts. Add one, then drag it along its host wall. The wall remains one editable side.</p>${doorList(wall.owners.map(o=>({id:o.roomId,side:o.side})))}<p class="hint">Thickness is drawn to scale. A curtain replaces the selected wall segment with a dashed line.</p><button id="backToRoom" class="wide">Back to space</button>`;
+      panel.innerHTML=`<div class="notice">${esc(owners)}${wall.noAccess?'<br>No-access exterior facade · fixed glazing allowed':''}<br>${fmtLength(wall.length)} · ${wall.owners.length>1?'Shared':''}</div><label>Wall type<select id="wallKind">${[['wall','Solid wall'],['curtain','Curtain · dashed'],['opening','Open passage'],['window','Window wall · mullions']].map(([v,l])=>`<option value="${v}" ${v===spec.kind?'selected':''}>${l}</option>`).join('')}</select></label>${['curtain','opening'].includes(spec.kind)?`<label>Curtain / passage face<select id="wallFace"><option value="exterior" ${spec.face!=='interior'?'selected':''}>Exterior</option><option value="interior" ${spec.face==='interior'?'selected':''}>Interior</option></select></label>`:''}${input('wallThickness','Thickness · inches',spec.thickness,'type="number" min="1" max="36" step="0.5"')}<button id="addHostedDoor" class="primary wide" ${spec.kind!=='wall'||wall.noAccess?'disabled':''}>＋ Add door to wall</button>${doorList(wall.owners.map(o=>({id:o.roomId,side:o.side})))}<button id="backToRoom" class="wide">Back to space</button>`;
       $('#wallKind').onchange=e=>editWall({kind:e.target.value});if($('#wallFace'))$('#wallFace').onchange=e=>editWall({face:e.target.value});$('#wallThickness').onchange=e=>editWall({thickness:Number(e.target.value)});
       $('#addHostedDoor').onclick=beginDoorPlacement;
       addWallGeometryControls(wall);
       $('#backToRoom').onclick=()=>{const id=wallEditRoom(wall)?.id||activeCorridor||wall.owners[0].roomId;getRoom(id)?chooseRoom(id):chooseCorridor(id);};return;
     }
     if(activeCorridor&&getCorridor(activeCorridor)){renderCorridorInspector(getCorridor(activeCorridor));return;}
-    if(activeGroup&&getGroup(activeGroup)){
-      const group=getGroup(activeGroup),members=groupRooms(group.id);$('#inspectorTitle').textContent='Group properties';
-      panel.innerHTML=`${input('groupName','Group name',group.name,'maxlength="48"')}<div class="metric"><strong>${fmtArea(members.reduce((n,r)=>n+displayArea(r),0))}</strong><span>sf · ${members.length} rooms</span></div><div class="two"><button id="groupRect">Rectangle boundary</button><button id="groupPoly">Polyline boundary</button></div><p class="hint">A group boundary controls these rooms only. Every room still respects the site boundary.</p><div class="subheading">Arrange</div>${edgeAlignmentControls(members[0])}${input('groupRotation','Rotate group by · degrees',0,'type="number" min="-180" max="180" step="1"')}<button id="rotateGroup" class="wide">Rotate group + boundary</button><div class="subheading">Members</div><div class="side-list">${members.map(r=>`<button class="side-button" data-room="${r.id}">${esc(r.name)}<small>${fmtArea(displayArea(r))} sf</small></button>`).join('')}</div><button id="ungroup" class="wide danger" style="margin-top:18px">Ungroup rooms</button>`;
-      $('#groupName').onchange=e=>{checkpoint();group.name=e.target.value.trim().slice(0,48)||group.name;render();};$('#groupRect').onclick=()=>beginBoundary('rect',group.id);$('#groupPoly').onclick=()=>beginBoundary('poly',group.id);$('#alignEdges').onclick=()=>alignPickedEdges(members.map(r=>r.id));$('#rotateGroup').onclick=()=>rotateGroup(group,Number($('#groupRotation').value));$('#ungroup').onclick=()=>{checkpoint();members.forEach(r=>r.groupId=null);model.groups=model.groups.filter(g=>g.id!==group.id);model.boundaries=model.boundaries.filter(b=>b.groupId!==group.id);activeGroup=null;render();status('Rooms ungrouped. Touching walls remain shared.');};return;
-    }
     if(room){
-      $('#inspectorTitle').textContent=room.name;
+      $('#inspectorTitle').textContent=room.name.toUpperCase();
       const sideWalls=walls.filter(w=>w.owners.some(o=>o.roomId===room.id)||w.adjacentRoomIds?.includes(room.id));
-      panel.innerHTML=`<div class="two room-actions"><button id="addRoomDoor" class="primary">＋ Add door</button><button id="isolateRoom">${isolatedRoom===room.id?'Exit isolation':'Isolate room'}</button></div>${input('roomName','Room name',room.name,'maxlength="48"')}<div class="metric"><strong>${fmtArea(displayArea(room))}</strong><span>sf · hatched floor area</span></div>${corridorLoss(room)>.01?`<div class="notice warning">Corridor has priority. ${fmt(corridorLoss(room))} sf reserved for circulation. Original ${fmt(G.area(G.polygon(room)))} sf shape is retained. Drag a remaining portion to move the room; the cutout updates. Deleting the corridor restores its full shape.</div>`:""}<p class="hint">Width and depth measure hatch extents along the room grid, not wall centerlines. Walls and corridor cutouts are excluded from hatch area. Dimensions round to the nearest inch; enter 12&#39; 6&quot; or decimal feet. For stepped or split rooms, ≈ A × B gives overall extents, not net area.</p><div class="two">${input('roomWidth','Hatch width · ft / in',fmtLength(hatchMetrics(room).width),'type="text"')}${input('roomDepth','Hatch depth · ft / in',fmtLength(hatchMetrics(room).depth),'type="text"')}</div><div class="two">${input('roomArea','Hatch area · sf',roundArea(displayArea(room)),'type="number" min="0.5" step="0.5"')}${input('roomAngle','Room grid · degrees',room.angle.toFixed(2),'type="number" min="-180" max="180" step="1"')}</div><div class="two"><label>Base shape<select id="roomShape"><option value="rect" ${room.shape==='rect'?'selected':''}>Rectangle</option><option value="l" ${room.shape==='l'?'selected':''}>L-shaped</option>${room.shape==='custom'?'<option value="custom" selected disabled>Extended outline</option>':''}</select></label><label>Room color<input id="roomColor" type="color" value="${room.color}"></label></div><label>Group<select id="roomGroup"><option value="">No group</option>${model.groups.map(g=>`<option value="${g.id}" ${room.groupId===g.id?'selected':''}>${esc(g.name)}</option>`).join('')}</select></label><label class="check"><input id="roomLocked" type="checkbox" ${room.locked?'checked':''}> Lock geometry and location</label><button id="alignRoom" class="wide" ${room.locked?'disabled':''}>Fit side to nearby boundary</button><p class="hint">${room.boundaryFit?.manual?'Manual wall edits stay in place when moving this room. Width/depth scale this edited outline.':'At a corner, two sides follow both boundary edges while other walls keep the room grid and area.'} Select an individual wall below to drag it or enter a new length.</p>${doorList([{id:room.id}])}<div class="subheading">Individual walls</div><div class="side-list">${sideWalls.map(w=>`<button class="side-button" data-wall="${esc(w.id)}"><span>${roomWallLabel(w,room)} · ${fmtLength(w.length)}</span><small>${w.owners.length>1?'shared · ':''}${esc(w.style.kind)}</small></button>`).join('')}</div><button id="deleteRoom" class="wide danger" style="margin-top:18px">Delete room</button>`;
+      panel.innerHTML=`<div class="two room-actions"><button id="addRoomDoor" class="primary">＋ Add door</button><button id="isolateRoom">${isolatedRoom===room.id?'Exit isolation':'Isolate room'}</button></div>${input('roomName','Room name',room.name,'maxlength="48"')}${input('roomNumber','Room number',room.number||'','maxlength="32"')}<div class="metric"><strong>${fmtArea(displayArea(room))}</strong><span>sf · hatched floor area</span></div>${corridorLoss(room)>.01?`<div class="notice warning">${fmtArea(corridorLoss(room))} sf corridor overlap</div>`:""}<div class="two">${input('roomWidth','Hatch width · ft / in',fmtLength(hatchMetrics(room).width),'type="text"')}${input('roomDepth','Hatch depth · ft / in',fmtLength(hatchMetrics(room).depth),'type="text"')}</div><div class="two">${input('roomArea','Hatch area · sf',roundArea(displayArea(room)),'type="number" min="0.5" step="0.5"')}${input('roomAngle','Room grid · degrees',room.angle.toFixed(2),'type="number" min="-180" max="180" step="1"')}</div><div><label>Room color<input id="roomColor" type="color" value="${room.color}"></label></div><label class="check"><input id="roomLocked" type="checkbox" ${room.locked?'checked':''}> Lock geometry and location</label><button id="alignRoom" class="wide" ${room.locked?'disabled':''}>Fit side to nearby boundary</button>${doorList([{id:room.id}])}<button id="deleteRoom" class="wide danger" style="margin-top:18px">Delete room</button>`;
       $('#addRoomDoor').onclick=beginDoorPlacement;$('#isolateRoom').onclick=()=>isolatedRoom===room.id?exitIsolation():isolateRoom(room.id);
+      $('#roomNumber').onchange=e=>setRoomNumber(room,e.target.value);
       $('#roomName').onchange=e=>{checkpoint();room.name=e.target.value.trim().slice(0,48)||room.name;delete room.shortLabel;render();};$('#roomColor').onchange=e=>{checkpoint();room.color=e.target.value;render();};$('#roomLocked').onchange=e=>{checkpoint();room.locked=e.target.checked;render();};
       ['Width','Depth','Area'].forEach(name=>$('#room'+name).onchange=e=>{try{const field=name.toLowerCase(),raw=name==='Area'?Number(e.target.value):parseLength(e.target.value),target=name==='Area'?roundArea(raw):roundLength(raw),shown=name==='Area'?roundArea(hatchMetrics(room).area):roundLength(hatchMetrics(room)[field]);if(Math.abs(target-shown)<.00001){render();return;}updateRoom(room,G.hatchSizePatch(room,name.toLowerCase(),target,model.corridors,model.boundaries),false,true);}catch(error){status(error.message);render();}});
       $('#roomAngle').onchange=e=>updateRoom(room,{angle:Number(e.target.value)});
-      $('#roomShape').onchange=e=>{const shape=e.target.value;updateRoom(room,{shape,depth:G.area(G.polygon(room))/(room.width*(shape==='l'?.75:1)),walls:Array.from({length:shape==='l'?6:4},()=>({kind:'wall',thickness:model.settings.thickness,segments:[]}))});};
-      $('#roomGroup').onchange=e=>updateRoom(room,{groupId:e.target.value?Number(e.target.value):null});$('#alignRoom').onclick=()=>updateRoom(room,{},true);$('#deleteRoom').onclick=()=>{checkpoint();model.rooms=model.rooms.filter(r=>r.id!==room.id);model.doors=model.doors.filter(d=>d.hostId!==room.id);selected.clear();render();status('Room deleted. Undo restores it.');};return;
+      $('#alignRoom').onclick=()=>updateRoom(room,{},true);$('#deleteRoom').onclick=()=>{checkpoint();model.rooms=model.rooms.filter(r=>r.id!==room.id);model.doors=model.doors.filter(d=>d.hostId!==room.id);selected.clear();render();status('Room deleted. Undo restores it.');};return;
     }
-    $('#inspectorTitle').textContent=selected.size?'Multiple rooms':'Select a room';panel.innerHTML=`<div class="empty">${selected.size?`${selected.size} rooms selected. Group them to set a shared boundary or arrange their edges.`:'Click a room to edit its dimensions. Select one room before dragging its edges. Click an edge for its door, curtain and thickness settings.'}</div>${selected.size>1?edgeAlignmentControls(getRoom([...selected][0]))+'<button id="groupFromInspector" class="primary wide">Group selected rooms</button>':''}`;if($('#groupFromInspector'))$('#groupFromInspector').onclick=makeGroup;if($('#alignEdges'))$('#alignEdges').onclick=()=>alignPickedEdges([...selected]);
+    $('#inspectorTitle').textContent=selected.size?'Multiple rooms':'EXAM ROOM';panel.innerHTML=selected.size>1?edgeAlignmentControls(getRoom([...selected][0])):'';if($('#alignEdges'))$('#alignEdges').onclick=()=>alignPickedEdges([...selected]);
   }
   function validDimensions(room){return [room.x,room.y,room.width,room.depth,room.angle].every(Number.isFinite)&&room.width>=2&&room.depth>=2&&room.width<=500&&room.depth<=500;}
   function wallForReference(reference){
@@ -400,8 +413,7 @@
     if(!canMoveWall(wall)){$('#inspector').insertAdjacentHTML('afterbegin',`<div class="notice">${wallEditRoom(wall)?'Unlock the adjoining rooms before moving this wall.':'Select one adjoining room first to move this wall. Wall finishes remain editable.'}</div>`);return;}
     const owner=G.wallReference(wall,obstacles(),one()?.id),entity=getEntity(owner.roomId),points=G.polygon(entity),edge=G.edges(points)[owner.side];
     const locked=entity.locked||isolatedRoom!==entity.id&&wall.owners.some(o=>getEntity(o.roomId)?.locked),disabled=locked?'disabled':'';
-    $('#inspector').insertAdjacentHTML('beforeend',`<section class="wall-geometry"><h3>Move / resize wall</h3><p class="hint">${esc(entity.name)} · Side ${owner.side+1}. Drag this selected room’s wall or its round handle. ${isolatedRoom===entity.id?'Isolated: only this room changes.':'Shared partitions move together. Double-click the room to isolate it.'}</p><label>Shift wall · ft (+ outward, − inward)<input id="wallOffset" type="number" step="0.25" value="0" ${disabled}></label><button id="applyWallOffset" class="primary wide" ${disabled}>Move wall</button><label>Whole side length · ft<input id="wallSideLength" type="number" min="0.5" max="1000" step="0.25" value="${G.distance(edge.a,edge.b).toFixed(3)}" ${disabled}></label><label>Keep fixed<select id="wallAnchor" ${disabled}><option value="start">Endpoint A · start</option><option value="end">Endpoint B · end</option></select></label><button id="applyWallLength" class="wide" ${disabled}>Set side length</button><p class="hint">Length changes move the adjoining wall; the chosen A/B endpoint stays fixed.${locked?' Unlock the adjoining room before editing.':''}</p></section>`);
-    addExtensionControls(wall,owner,edge);
+    $('#inspector').insertAdjacentHTML('beforeend',`<section class="wall-geometry"><h3>Move / resize wall</h3><label>Shift wall · ft (+ outward, − inward)<input id="wallOffset" type="number" step="0.25" value="0" ${disabled}></label><button id="applyWallOffset" class="primary wide" ${disabled}>Move wall</button><label>Whole side length · ft<input id="wallSideLength" type="number" min="0.5" max="1000" step="0.25" value="${G.distance(edge.a,edge.b).toFixed(3)}" ${disabled}></label><label>Keep fixed<select id="wallAnchor" ${disabled}><option value="start">Endpoint A · start</option><option value="end">Endpoint B · end</option></select></label><button id="applyWallLength" class="wide" ${disabled}>Set side length</button></section>`);
     $('#applyWallOffset').onclick=()=>applyWallMove(owner,Number($('#wallOffset').value));
     $('#applyWallLength').onclick=()=>{const move=G.sideLengthMove(entity,owner.side,Number($('#wallSideLength').value),$('#wallAnchor').value);if(!move){status('Enter a valid side length.');return;}applyWallMove(move.reference,move.offset,owner);};
     ['#wallOffset','#wallSideLength'].forEach(id=>$(id).onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();$(id==='#wallOffset'?'#applyWallOffset':'#applyWallLength').click();}});
@@ -438,7 +450,7 @@
   }
   function chooseCorridor(id){if(!getCorridor(id))return;completedRoomClick=null;isolatedRoom=wallExtension=selectedCorridorSide=null;doorPlacement=null;activeCorridor=id;selected.clear();selectedWall=selectedDoor=activeGroup=null;drawing=null;render();}
   function beginCorridor(existing=null){
-    doorPlacement=null;isolatedRoom=wallExtension=selectedCorridorSide=null;
+    numbering=doorPlacement=null;isolatedRoom=wallExtension=selectedCorridorSide=null;
     const width=existing?.width??Number($('#corridorWidth').value);
     if(!Number.isFinite(width)||width<1||width>100){status('Corridor width must be 1–100 feet.');return;}
     const drawMode=existing?.drawMode||($('#corridorDirection').value==='free'?'free':'ortho');
@@ -469,7 +481,7 @@
     plan.focus({preventScroll:true});
   }
   function resumeDrawing(){
-    if(!stoppedDrawing)return;drawing=stoppedDrawing;stoppedDrawing=null;drawing.preview=null;render();plan.focus({preventScroll:true});
+    if(!stoppedDrawing)return;numbering=doorPlacement=null;drawing=stoppedDrawing;stoppedDrawing=null;drawing.preview=null;render();plan.focus({preventScroll:true});
     status('Path resumed. Undo point corrects a corner; Stop drawing saves and exits.');
   }
   function undoDrawingPoint(){if(!drawing)return;drawing.points.pop();drawing.preview=null;draw();plan.focus({preventScroll:true});status('Last point removed. Continue drawing, or Escape to cancel.');}
@@ -499,7 +511,7 @@
   function renderCorridorInspector(c){
     $('#inspectorTitle').textContent='Corridor properties';
     const sideWalls=walls.filter(w=>w.owners.some(o=>o.roomId===c.id));
-    $('#inspector').innerHTML=`<button id="deleteCorridor" class="wide danger corridor-delete-primary" type="button">Delete this corridor</button><button id="addCorridorDoor" class="primary wide" type="button">＋ Add corridor door</button>${input('corridorName','Name',c.name,'maxlength="48"')}${input('pathWidth','Fixed width · ft',c.width,'type="number" readonly')}<div class="notice">Wall-free circulation void. Nearby paths automatically connect across gaps up to 2 ft. Rooms stop and snap at its edges; rooms already cut by it can move and their cutouts update.</div><p class="hint">Doors can be hosted on exposed corridor edges or end caps. Use Add corridor door and click a blue edge. The outline stays a selection guide, not a new wall. Delete a path to restore the room area it reserves. Each source path stays separately selectable and deletable.</p>${doorList([{id:c.id}])}`;
+    $('#inspector').innerHTML=`<button id="deleteCorridor" class="wide danger corridor-delete-primary" type="button">Delete this corridor</button><button id="addCorridorDoor" class="primary wide" type="button">＋ Add corridor door</button>${input('corridorName','Name',c.name,'maxlength="48"')}${input('pathWidth','Fixed width · ft',c.width,'type="number" readonly')}<div class="notice">Clear circulation</div>${doorList([{id:c.id}])}`;
 
     $('#addCorridorDoor').onclick=beginDoorPlacement;$('#corridorName').onchange=e=>{checkpoint();c.name=e.target.value.trim().slice(0,48)||c.name;render();};
 
@@ -533,11 +545,12 @@
     render();status(result.message+(oldCount>model.doors.length?' Doors on removed sides were removed too; Undo restores them.':''));
   }
   function beginDoorPlacement(){
+    numbering=null;
     doorPlacement=doorPlacement?null:{hover:null};
     if(drag?.frame)cancelAnimationFrame(drag.frame);
     drawing=drag=preview=wallPreview=null;isolatedRoom=wallExtension=selectedCorridorSide=null;completedRoomClick=null;
     activeCorridor=activeGroup=null;selectedDoor=selectedWall=null;render();plan.focus({preventScroll:true});
-    status(doorPlacement?'Door brush on. Click any solid room wall or exposed corridor edge, then keep clicking to add doors. Click Stop adding doors or press Escape to finish.':'Door brush stopped.');
+    status(doorPlacement?'Click walls to add doors · Escape to stop.':'Door brush stopped.');
   }
   function doorPlacementWall(p){
     return walls.concat(G.corridorDoorWalls(model.corridors,model.boundaries)).filter(w=>w.style.kind==='wall')
@@ -587,7 +600,7 @@
     const door=model.doors.find(d=>d.id===selectedDoor),f=H.frame(door,obstacles());if(!f)return;
     const o=H.opening(door,obstacles()),shown=doorViews.some(d=>d.id===door.id);
     $('#inspectorTitle').textContent='Door properties';
-    $('#inspector').innerHTML=`<div class="notice">Hosted on ${esc(f.host.name)} · Side ${door.side+1}<br>This is an independent door, not a separate wall piece.</div>${shown?'':'<div class="notice warning">The opening does not currently fit on a clear solid span. The door is retained: restore the wall, reduce the door width, or choose another position.</div>'}<label>Door type<select id="doorLeaves"><option value="1" ${door.leaves!==2?'selected':''}>Single leaf</option><option value="2" ${door.leaves===2?'selected':''}>Double door · equal leaves</option></select></label>${input('doorWidth','Total opening width · ft',door.width,'type="number" min="0.5" max="12" step="0.25"')}${input('doorPosition','Door center from endpoint A · ft',Number((o?.offset??door.position*f.length).toFixed(3)),`type="number" min="0" max="${f.length}" step="0.25"`)}<p class="hint">Host length: ${fmtLength(f.length)}. Drag the door symbol to slide it along this wall. The insert follows its host when the room or wall moves.</p><div class="two door-actions"><button id="flipHinge">Flip hinge</button><button id="flipSwing">Flip swing</button></div><button id="backToHost" class="wide">Select host wall</button><button id="deleteDoor" class="wide danger door-actions">Delete door</button>`;
+    $('#inspector').innerHTML=`<div class="notice">Hosted on ${esc(f.host.name)} · Side ${door.side+1}</div>${shown?'':'<div class="notice warning">Door does not fit on its host.</div>'}<label>Door type<select id="doorLeaves"><option value="1" ${door.leaves!==2?'selected':''}>Single leaf</option><option value="2" ${door.leaves===2?'selected':''}>Double door · equal leaves</option></select></label>${input('doorWidth','Total opening width · ft',door.width,'type="number" min="0.5" max="12" step="0.25"')}${input('doorPosition','Door center from endpoint A · ft',Number((o?.offset??door.position*f.length).toFixed(3)),`type="number" min="0" max="${f.length}" step="0.25"`)}<div class="two door-actions"><button id="flipHinge">Flip hinge</button><button id="flipSwing">Flip swing</button></div><button id="backToHost" class="wide">Select host wall</button><button id="deleteDoor" class="wide danger door-actions">Delete door</button>`;
     $('#doorLeaves').onchange=e=>editDoor({leaves:Number(e.target.value)});
     $('#flipHinge').disabled=door.leaves===2;
     $('#doorWidth').onchange=e=>editDoor({width:Number(e.target.value)});
@@ -625,7 +638,7 @@
   function chooseRoom(id,additive=false){if(!getRoom(id))return;if(isolatedRoom!==id||additive)isolatedRoom=null;wallExtension=selectedCorridorSide=null;doorPlacement=null;activeCorridor=null;selectedWall=selectedDoor=null;activeGroup=null;if(additive){selected.has(id)?selected.delete(id):selected.add(id);}else selected=new Set([id]);render();}
   function chooseWall(id){if(id!==selectedWall)wallExtension=null;doorPlacement=null;const wall=walls.find(w=>w.id===id);if(!wall)return;if(!wall.owners.some(o=>o.roomId===activeCorridor))activeCorridor=null;selectedDoor=null;selectedWall=id;activeGroup=null;render();}
   function edgeAlignmentControls(reference){
-    return `<label>Line up wall faces<select id="alignSide"><option value="0">Top edges</option><option value="2">Bottom edges</option><option value="3">Left edges</option><option value="1">Right edges</option></select></label><button id="alignEdges" class="wide">Align edges</button><p class="hint">${esc(reference?.name||'First selected room')} stays fixed. Rooms slide into alignment without resizing or rearranging.</p>`;
+    return `<label>Line up wall faces<select id="alignSide"><option value="0">Top edges</option><option value="2">Bottom edges</option><option value="3">Left edges</option><option value="1">Right edges</option></select></label><button id="alignEdges" class="wide">Align edges</button>`;
   }
   function alignPickedEdges(ids){
     const members=ids.map(getRoom).filter(Boolean),picked=new Set(ids),side=Number($('#alignSide').value);
@@ -635,19 +648,8 @@
     checkpoint();model.rooms=model.rooms.map(r=>aligned.find(a=>a.id===r.id)||r);render();
     status(['Top','Right','Bottom','Left'][side]+' wall faces aligned. Room sizes and arrangement preserved.');
   }
-  function makeGroup(){
-    if(selected.size<2)return;checkpoint();
-    const group={id:model.nextId++,name:'Group '+(model.groups.length+1),color:'#3675c8'};
-    model.groups.push(group);model.rooms.filter(r=>selected.has(r.id)).forEach(r=>r.groupId=group.id);
-    activeGroup=group.id;activeCorridor=selectedWall=selectedDoor=null;render();
-    status('Group created. Rooms kept in place. Choose Top, Bottom, Left or Right in Align edges.');
-  }
   function groupValid(rooms,boundaries=model.boundaries,corridors=[]){return rooms.every((r,i)=>G.validPlacement(r,rooms.filter((_,j)=>j!==i),boundaries.filter(b=>!b.groupId||b.groupId===r.groupId)))&&corridors.every(c=>G.validCorridor(c,rooms,boundaries));}
-  function rotateGroup(group,angle){if(!Number.isFinite(angle))return;const members=groupRooms(group.id);if(!members.length||members.some(r=>r.locked)){status('Unlock group members before rotating.');return;}
-    const center={x:members.reduce((n,r)=>n+r.x,0)/members.length,y:members.reduce((n,r)=>n+r.y,0)/members.length};const proposed=copy(model.rooms),boundaries=copy(model.boundaries);
-    proposed.filter(r=>r.groupId===group.id).forEach(r=>Object.assign(r,G.add(center,G.rotate(G.sub(r,center),angle)),{angle:G.normalize(r.angle+angle)}));boundaries.filter(b=>b.groupId===group.id).forEach(b=>b.points=b.points.map(p=>G.add(center,G.rotate(G.sub(p,center),angle))));
-    if(!groupValid(proposed,boundaries,model.corridors)){status('Rotation would cross the site boundary or another room.');return;}checkpoint();model.rooms=proposed;model.boundaries=boundaries;render();status('Group and its boundary rotated together.');}
-  function beginBoundary(type,groupId=null){doorPlacement=null;isolatedRoom=wallExtension=selectedCorridorSide=null;drawing={type,groupId,points:[]};selectedWall=selectedDoor=null;render();status(type==='rect'?'Drag the two opposite corners of the boundary.':'Click each boundary corner, then Finish boundary. Escape cancels.');}
+  function beginBoundary(type,groupId=null){numbering=doorPlacement=null;isolatedRoom=wallExtension=selectedCorridorSide=null;drawing={type,groupId,points:[]};selectedWall=selectedDoor=null;render();status(type==='rect'?'Drag the two opposite corners of the boundary.':'Click each boundary corner, then Finish boundary. Escape cancels.');}
   function finishBoundary(){if(!drawing)return;const points=drawing.preview||drawing.points;
     if(!G.simple(points)){status('Use at least three corners with no crossing edges.');return;}
     const groupId=drawing.groupId,name=groupId?(getGroup(groupId)?.name||'Group')+' boundary':'Site boundary';
@@ -661,7 +663,7 @@
   function findPosition(room){const candidates=[{x:view.x,y:view.y}],bounds=applicable(room);let minX=0,minY=0,maxX=120,maxY=100;if(bounds.length){const p=bounds[0].points;minX=Math.min(...p.map(q=>q.x));minY=Math.min(...p.map(q=>q.y));maxX=Math.max(...p.map(q=>q.x));maxY=Math.max(...p.map(q=>q.y));}
     for(let y=minY+room.depth/2;y<=maxY;y+=2)for(let x=minX+room.width/2;x<=maxX;x+=2)candidates.push({x,y});
     return candidates.map(p=>({...room,...p})).find(r=>G.validPlacement(r,obstacles(),bounds));}
-  function addRoom(values){const snapshot=copy(model);const room=newRoom(values.name,values.width,values.depth,values.shape,values.angle);room.groupId=activeGroup;const placed=findPosition(room);if(!placed){model=snapshot;status('No clear space for this room. Enlarge a boundary or use smaller dimensions.');return null;}undo.push(snapshot);redo=[];model.rooms.push(placed);activeCorridor=null;selected=new Set([room.id]);activeGroup=null;selectedWall=selectedDoor=null;render();status('Room added. Drag its interior to move it, or drag an edge to resize.');return placed;}
+  function addRoom(values){const snapshot=copy(model);const room=newRoom(values.name,values.width,values.depth,values.shape,values.angle);room.groupId=null;const placed=findPosition(room);if(!placed){model=snapshot;status('No clear space for this room. Enlarge a boundary or use smaller dimensions.');return null;}undo.push(snapshot);redo=[];model.rooms.push(placed);activeCorridor=null;selected=new Set([room.id]);activeGroup=null;selectedWall=selectedDoor=null;render();status('Room added.');return placed;}
   function clearPlanSelection(){completedRoomClick=null;isolatedRoom=wallExtension=selectedCorridorSide=null;doorPlacement=null;selected.clear();activeCorridor=activeGroup=selectedWall=selectedDoor=null;render();}
   function startPan(event){
     event.preventDefault();plan.focus({preventScroll:true});
@@ -679,6 +681,7 @@
     if(event.button===1){startPan(event);return;}
     if(event.button!==0)return;plan.focus({preventScroll:true});const p=world(event);
     if(drawing){if(['poly','corridor'].includes(drawing.type)){const end=drawingPoint(p);if(!drawing.points.length||G.distance(end,drawing.points.at(-1))>.1)drawing.points.push({x:end.x,y:end.y});drawing.preview=null;drawing.pointerStart=p;plan.setPointerCapture(event.pointerId);draw();}else{drawing.points=[{x:p.x,y:p.y}];drag={kind:'boundary'};plan.setPointerCapture(event.pointerId);}return;}
+    if(numbering){const hit=Number(event.target.closest('[data-room]')?.dataset.room);if(hit)numberRoom(hit);return;}
     if(doorPlacement){const w=doorPlacementWall(p);if(w)addHostedDoor(w,p);else status('Click a solid room wall or an exposed corridor edge/end cap.');return;}
     const doorId=Number(event.target.closest('[data-door]')?.dataset.door);
     if(doorId){beginDoorDrag(doorId,p);plan.setPointerCapture(event.pointerId);return;}
@@ -782,44 +785,45 @@
     const corridor=event.target.closest('[data-corridor]');if(corridor)chooseCorridor(Number(corridor.dataset.corridor));
     if(room)chooseRoom(Number(room.dataset.room),event.shiftKey||$('#multi').checked);
     if(wall)chooseWall(wall.dataset.wall);
-    if(group){isolatedRoom=wallExtension=selectedCorridorSide=null;activeCorridor=null;activeGroup=Number(group.dataset.group);selected=new Set(groupRooms(activeGroup).map(r=>r.id));selectedWall=selectedDoor=null;render();}
     if(remove){checkpoint();model.boundaries=model.boundaries.filter(b=>b.id!==Number(remove.dataset.removeBoundary));render();status('Boundary removed. Undo restores it.');}
   });
-  $('#roomList').addEventListener('change',e=>{if(e.target.dataset.pick)chooseRoom(Number(e.target.dataset.pick),true);});
-  $('#createForm').onsubmit=event=>{event.preventDefault();const values={name:$('#newName').value.trim().slice(0,48),width:Number($('#newWidth').value),depth:Number($('#newDepth').value),shape:$('#newShape').value,angle:Number($('#newAngle').value)};if(values.name&&validDimensions({...values,x:0,y:0}))addRoom(values);};
-  ['#newWidth','#newDepth','#newShape'].forEach(id=>$(id).addEventListener('input',()=>$('#newArea').textContent=fmtArea(Number($('#newWidth').value)*Number($('#newDepth').value)*($('#newShape').value==='l'?.75:1))+' sf'));
+  $('#createForm').onsubmit=event=>{event.preventDefault();const values={name:$('#newName').value.trim().slice(0,48),width:Number($('#newWidth').value),depth:Number($('#newDepth').value),shape:'rect',angle:Number($('#newAngle').value)};if(values.name&&validDimensions({...values,x:0,y:0}))addRoom(values);};
+  ['#newWidth','#newDepth'].forEach(id=>$(id).addEventListener('input',()=>$('#newArea').textContent=fmtArea(Number($('#newWidth').value)*Number($('#newDepth').value))+' sf'));
 
   $('#siteRect').onclick=()=>beginBoundary('rect');$('#sitePoly').onclick=()=>beginBoundary('poly');$('#finish').onclick=()=>drawing?.type==='corridor'?stopDrawing():finishDrawing();$('#stopDrawing').onclick=()=>stopDrawing();$('#resumeDrawing').onclick=resumeDrawing;$('#discardDraft').onclick=()=>{stoppedDrawing=null;render();status('Unfinished path discarded. Existing rooms and corridors are unchanged.');};$('#undoPoint').onclick=undoDrawingPoint;$('#cancel').onclick=()=>{drawing=null;drag=null;render();status('Drawing canceled.');};
   $('#exitIsolation').onclick=exitIsolation;
   $('#addDoor').onclick=beginDoorPlacement;
-  $('#makeGroup').onclick=makeGroup;$('#clearSelection').onclick=clearPlanSelection;
+  $('#renumberRooms').onclick=beginNumbering;
+  $('#clientPalette').onclick=e=>{
+    const color=e.target.closest('[data-client-color]')?.dataset.clientColor;
+    if(!/^#[0-9a-f]{6}$/i.test(color||'')||!selected.size)return;
+    checkpoint();model.rooms.filter(r=>selected.has(r.id)).forEach(r=>r.color=color);render();status('Color updated.');
+  };
+  $('#clearSelection').onclick=clearPlanSelection;
   function history(direction){const from=direction==='undo'?undo:redo,to=direction==='undo'?redo:undo;if(!from.length)return;const brushActive=!!doorPlacement;completedRoomClick=null;to.push(copy(model));model=from.pop();selected=new Set([...selected].filter(id=>getRoom(id)));activeCorridor=selectedWall=selectedDoor=activeGroup=null;isolatedRoom=wallExtension=selectedCorridorSide=null;doorPlacement=drawing=stoppedDrawing=drag=preview=wallPreview=null;if(brushActive)doorPlacement={hover:null};syncSettings();render();status(direction==='undo'?'Undone.':'Redone.');}
   $('#undo').onclick=()=>history('undo');$('#redo').onclick=()=>history('redo');
-  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&doorPlacement){event.preventDefault();doorPlacement=null;render();return;}if(handleDrawingKey(event))return;if(/INPUT|SELECT|TEXTAREA/.test(event.target.tagName))return;if(event.key==='Delete'&&!drawing&&selectedDoor&&!event.repeat&&!event.ctrlKey&&!event.metaKey&&!event.altKey){event.preventDefault();deleteDoor();return;}if(event.key==='Delete'&&!drawing&&activeCorridor&&!event.repeat&&!event.ctrlKey&&!event.metaKey&&!event.altKey){event.preventDefault();removeCorridor(activeCorridor);return;}if(event.key==='Escape'){if(drag?.frame)cancelAnimationFrame(drag.frame);drawing=drag=preview=wallPreview=null;if(wallExtension)wallExtension=null;else isolatedRoom=null;render();}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();history(event.shiftKey?'redo':'undo');}},true);
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&numbering){event.preventDefault();numbering=null;render();return;}if(event.key==='Escape'&&doorPlacement){event.preventDefault();doorPlacement=null;render();status('Ready.');return;}if(handleDrawingKey(event))return;if(/INPUT|SELECT|TEXTAREA/.test(event.target.tagName))return;if(event.key==='Delete'&&!drawing&&selectedDoor&&!event.repeat&&!event.ctrlKey&&!event.metaKey&&!event.altKey){event.preventDefault();deleteDoor();return;}if(event.key==='Delete'&&!drawing&&activeCorridor&&!event.repeat&&!event.ctrlKey&&!event.metaKey&&!event.altKey){event.preventDefault();removeCorridor(activeCorridor);return;}if(event.key==='Escape'){if(drag?.frame)cancelAnimationFrame(drag.frame);drawing=drag=preview=wallPreview=null;if(wallExtension)wallExtension=null;else isolatedRoom=null;render();}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'){event.preventDefault();history(event.shiftKey?'redo':'undo');}},true);
   function renderExclusionControls(){
     const site=model.boundaries.find(b=>!b.groupId),panel=$('#exclusionControls');if(!panel)return;
-    if(model.reference?.variant==='boundary'){panel.innerHTML='<h3>Boundary dimensions · feet</h3><p class="hint">Edge numbers match the plan. Photo labels are not a claim that the entire outline closes exactly. ≈ means unresolved.</p>'+model.boundaries[0].points.map((a,i)=>{const b=model.boundaries[0].points[(i+1)%model.boundaries[0].points.length];return '<p class="hint"><strong>E'+(i+1)+': '+esc(model.boundaryLabels?.[i]||'Verify')+'</strong><br>Drawn length: '+fmtLength(G.distance(a,b))+'</p>';}).join('');return;}
-    if(!site){panel.innerHTML='<p class="hint">Draw a site boundary to add the lower-right exclusion.</p>';return;}
+    if(model.reference?.variant==='boundary'){panel.innerHTML='<h3>Boundary dimensions · feet</h3>'+model.boundaries[0].points.map((a,i)=>{const b=model.boundaries[0].points[(i+1)%model.boundaries[0].points.length];return '';}).join('');return;}
+    if(!site){panel.innerHTML='';return;}
     const literal=window.LightSeptemberStudies?.sourcePoints;
-    if(literal&&JSON.stringify(site.points)===JSON.stringify(literal)){panel.innerHTML='<p class="hint">Exact supplied point boundary. Its small edge recesses are part of your outline, not an inferred 50 × 40-ft corner exclusion. Use the X / Y point editor below to change them.</p>';return;}
+    if(literal&&JSON.stringify(site.points)===JSON.stringify(literal)){panel.innerHTML='';return;}
     const e=E.cornerExclusion(site);
-    panel.innerHTML=`<label class="check"><input id="exclusionEnabled" type="checkbox" ${e.enabled?'checked':''}> Exclude lower-right corner</label><div class="two">${input('exclusionWidth','Width · ft',Number(e.width.toFixed(3)),'type="number" min="0.25" max="500" step="0.25"')}${input('exclusionHeight','Height · ft',Number(e.height.toFixed(3)),'type="number" min="0.25" max="500" step="0.25"')}</div><button id="applyExclusion" class="wide">Apply exclusion size</button><button id="resetExclusion" class="text-button">Use default 50 × 40 ft</button><p class="hint">Anchored at the lower-right outer corner. Off restores the full shell. Conflicting changes are blocked; rooms are never deleted or moved.</p>`;
+    panel.innerHTML=`<label class="check"><input id="exclusionEnabled" type="checkbox" ${e.enabled?'checked':''}> Exclude lower-right corner</label><div class="two">${input('exclusionWidth','Width · ft',Number(e.width.toFixed(3)),'type="number" min="0.25" max="500" step="0.25"')}${input('exclusionHeight','Height · ft',Number(e.height.toFixed(3)),'type="number" min="0.25" max="500" step="0.25"')}</div><button id="applyExclusion" class="wide">Apply exclusion size</button><button id="resetExclusion" class="text-button">Use default 50 × 40 ft</button>`;
     $('#exclusionEnabled').onchange=ev=>editExclusion({enabled:ev.target.checked});
     $('#applyExclusion').onclick=()=>editExclusion({width:Number($('#exclusionWidth').value),height:Number($('#exclusionHeight').value)});
     $('#resetExclusion').onclick=()=>editExclusion({enabled:true,width:50,height:40});
   }
-  $('.corridor-section').insertAdjacentHTML('beforebegin','<section id="columnsPanel"><h2>Columns · reference objects</h2><label class="check"><input id="columnsEnabled" type="checkbox" checked> Show / enable columns</label><label class="check"><input id="columnSnap" type="checkbox" checked> Snap rooms / walls / corridors to columns</label><p class="hint">Coordinates are column centers in feet. Columns are not room boundaries: they never clip hatches, change room area or block movement. Hiding or disabling a column also disables its snapping. This is a reference overlay, not a structural clearance check.</p><div id="columnList"></div><form id="columnForm"><label>Name<input id="columnName" value="C1" maxlength="32" required></label><div class="two"><label>Center X · ft<input id="columnX" type="number" value="-30" step="any" required></label><label>Center Y · ft<input id="columnY" type="number" value="-30" step="any" required></label><label>Width · ft<input id="columnWidth" type="number" value="1.5" min="0.1" max="100" step="any" required></label><label>Depth · ft<input id="columnDepth" type="number" value="1.5" min="0.1" max="100" step="any" required></label></div><button type="submit" class="wide">＋ Place column</button></form></section>');
+  $('.corridor-section').insertAdjacentHTML('beforebegin','<section id="columnsPanel"><div class="section-heading"><h2>Columns</h2><output id="columnCount"></output></div><label class="check"><input id="columnsEnabled" type="checkbox" checked> Show columns</label><label class="check"><input id="columnSnap" type="checkbox" checked> Snap to columns</label><label>Snap to<select id="columnSnapMode"><option value="face">Face</option><option value="center">Centerline</option></select></label><details><summary>Add column</summary><form id="columnForm"><label>Name<input id="columnName" value="C1" maxlength="32" required></label><div class="two"><label>Center X · ft<input id="columnX" type="number" value="-30" step="any" required></label><label>Center Y · ft<input id="columnY" type="number" value="-30" step="any" required></label><label>Width · ft<input id="columnWidth" type="number" value="1.5" min="0.1" max="100" step="any" required></label><label>Depth · ft<input id="columnDepth" type="number" value="1.5" min="0.1" max="100" step="any" required></label></div><button type="submit" class="wide">＋ Place column</button></form></details></section>');
   $('#columnForm').onsubmit=e=>{e.preventDefault();if((model.columns?.length||0)>=500){status('This project supports at most 500 columns.');return;}const c={name:$('#columnName').value.trim()||'Column',x:Number($('#columnX').value),y:Number($('#columnY').value),width:Number($('#columnWidth').value),depth:Number($('#columnDepth').value),enabled:true};if(!validColumn(c)){status('Enter finite X/Y centers and column dimensions from 0.1 to 100 ft.');return;}checkpoint();c.id=model.nextId++;(model.columns??=[]).push(c);$('#columnName').value='C'+(model.columns.length+1);render();status('Column placed. Room geometry and hatched areas are unchanged.');};
-  $('#columnsPanel').insertAdjacentHTML('beforeend','<details open><summary>Bulk columns · paste text</summary><p class="hint" id="bulkColumnHelp">One column per line: name, x, y, width, depth. All values are feet; X/Y locate the center in the same coordinates as boundary points. Negative coordinates are allowed. This adds columns without replacing existing ones; Undo removes the whole batch.</p><label>Column text<textarea id="bulkColumns" rows="6" spellcheck="false" aria-describedby="bulkColumnHelp" placeholder="C1, -30, -20, 1.5, 1.5&#10;C2, -15, -20, 2, 2"></textarea></label><button id="addBulkColumns" type="button" class="wide">＋ Add columns from text</button><p id="bulkColumnNotice" class="hint" role="status"></p></details>');
-  $('#addBulkColumns').onclick=()=>{try{const columns=E.parseColumnText($('#bulkColumns').value);if((model.columns?.length||0)+columns.length>500)throw Error('This project supports at most 500 columns; nothing was added.');checkpoint();for(const c of columns)(model.columns??=[]).push({...c,id:model.nextId++,enabled:true});render();$('#bulkColumnNotice').textContent=columns.length+' columns added. Undo restores the previous set.';status(columns.length+' columns added; rooms unchanged.');}catch(error){$('#bulkColumnNotice').textContent=error.message;status(error.message);}};
+  $('#columnsPanel').insertAdjacentHTML('beforeend','<details><summary>Bulk columns</summary><label>Name, X, Y, width, depth · ft<textarea id="bulkColumns" rows="6" spellcheck="false"  placeholder="C1, -30, -20, 1.5, 1.5&#10;C2, -15, -20, 2, 2"></textarea></label><button id="addBulkColumns" type="button" class="wide">＋ Add columns from text</button><p id="bulkColumnNotice" class="hint" role="status"></p></details>');
+  $('#addBulkColumns').onclick=()=>{try{const columns=E.parseColumnText($('#bulkColumns').value);if((model.columns?.length||0)+columns.length>500)throw Error('This project supports at most 500 columns; nothing was added.');checkpoint();for(const c of columns)(model.columns??=[]).push({...c,id:model.nextId++,enabled:true});render();$('#bulkColumnNotice').textContent=columns.length+' columns added.';status(columns.length+' columns added; rooms unchanged.');}catch(error){$('#bulkColumnNotice').textContent=error.message;status(error.message);}};
   for(const [id,key] of [['columnsEnabled','columnsEnabled'],['columnSnap','columnSnap']])$('#'+id).onchange=e=>{checkpoint();model.settings[key]=e.target.checked;render();status(key==='columnSnap'?'Column snapping '+(e.target.checked?'on.':'off.'):'Column overlay '+(e.target.checked?'on.':'off.'));};
-  $('#columnList').insertAdjacentHTML('beforebegin','<label>Column snap alignment<select id="columnSnapMode"><option value="face">Outside face · keep column clear</option><option value="center">Centerline · incorporate column in wall line</option></select></label><p class="hint">Applies to room walls, room movement and corridor edges/ends. Outside face keeps the column outside the corridor. Centerline aligns the wall line or corridor edge through the column center, so part of the column can project into the room/corridor. Columns stay non-bounding: they are not cut away and their area is not deducted. Changing this setting affects the next snap, not existing geometry.</p>');
   $('#columnSnapMode').onchange=e=>{if(!['face','center'].includes(e.target.value))return;checkpoint();model.settings.columnSnapMode=e.target.value;render();status(e.target.value==='center'?'Column centerline snapping · projection into clear space is allowed.':'Column face snapping · keep columns outside the corridor.');};
-  $('#columnList').onchange=e=>{const field=e.target.dataset.columnField,c=(model.columns||[]).find(c=>c.id===Number(e.target.dataset.columnId));if(!c||!['enabled','x','y','width','depth'].includes(field))return;const next={...c,[field]:field==='enabled'?e.target.checked:e.target.value===''?NaN:Number(e.target.value)};if(!validColumn(next)){renderColumns();status('Invalid column coordinates or size; nothing changed.');return;}checkpoint();Object.assign(c,next);render();status('Column updated; rooms unchanged.');};
-  $('#columnList').onclick=e=>{const id=Number(e.target.dataset.deleteColumn);if(!(model.columns||[]).some(c=>c.id===id))return;checkpoint();model.columns=model.columns.filter(c=>c.id!==id);render();status('Column removed. Undo restores it.');};
   let svgCandidates=[],boundaryImportType='SVG';
   const boundaryPointsExample='{\n  "points": [\n    {"x": 0, "y": 0},\n    {"x": 100, "y": 0},\n    {"x": 100, "y": 80},\n    {"x": 0, "y": 80}\n  ]\n}';
-  $('#svgChoose').insertAdjacentHTML('beforebegin',`<details id="boundaryPointsEditor" open><summary>New boundary from points · X / Y</summary><p class="hint" id="boundaryPointsHelp">Use the same "points" object as the saved JSON file, with an "x" and "y" value for each corner. Edit the example below or load your current boundary. Values are feet; X goes right and Y goes down. List corners around the perimeter; the last connects to the first. JSON uses a colon (:) after each name, not an equals sign.</p><label>Boundary points · named X / Y<textarea id="boundaryPoints" rows="10" spellcheck="false" aria-describedby="boundaryPointsHelp"></textarea></label><div class="two"><button id="boundaryPointsCurrent" type="button">Use current boundary</button><button id="boundaryPointsExample" type="button">Load X / Y example</button></div><button id="boundaryPointsPreview" type="button" class="wide">Preview points</button><p class="hint">Preview does not change your plan. Then choose “Replace boundary · keep rooms in place” or a separate study below, and Apply.</p></details>`);
+  $('#svgChoose').insertAdjacentHTML('beforebegin',`<details id="boundaryPointsEditor"><summary>Point coordinates</summary><label>Points · X / Y<textarea id="boundaryPoints" rows="10" spellcheck="false" ></textarea></label><div class="two"><button id="boundaryPointsCurrent" type="button">Current</button><button id="boundaryPointsExample" type="button">Example</button></div><button id="boundaryPointsPreview" type="button" class="wide">Preview points</button></details>`);
   $('#boundaryPoints').value=boundaryPointsExample;
   function clearBoundaryImport(message=''){
     svgCandidates=[];$('#svgApply').disabled=true;$('#svgOutline').innerHTML='';$('#svgPreview').textContent='';$('#svgNotice').textContent=message;
@@ -860,7 +864,7 @@
   function previewSvgBoundary(){
     try{const points=svgImportPoints(),xs=points.map(p=>p.x),ys=points.map(p=>p.y),w=Math.max(...xs)-Math.min(...xs),h=Math.max(...ys)-Math.min(...ys);
       const roomConflicts=model.rooms.filter(r=>!G.contains(G.polygon(r),points)).length,corridorConflicts=model.corridors.filter(c=>!G.contains(G.polygon(c),points)).length;
-      $('#svgPreview').innerHTML='<svg viewBox="'+(Math.min(...xs)-w*.05)+' '+(Math.min(...ys)-h*.05)+' '+w*1.1+' '+h*1.1+'" width="100%" height="150" aria-label="Imported boundary preview"><polygon points="'+points.map(p=>p.x+','+p.y).join(' ')+'" fill="#edf5f8" stroke="#235bb7" stroke-width="2" vector-effect="non-scaling-stroke"/></svg><p class="hint">'+fmt(w)+' × '+fmt(h)+' ft · '+points.length+' corners. Current layout: '+roomConflicts+' rooms and '+corridorConflicts+' corridors outside. Rooms are never moved or trimmed by import.</p>';
+      $('#svgPreview').innerHTML='<svg viewBox="'+(Math.min(...xs)-w*.05)+' '+(Math.min(...ys)-h*.05)+' '+w*1.1+' '+h*1.1+'" width="100%" height="150" aria-label="Imported boundary preview"><polygon points="'+points.map(p=>p.x+','+p.y).join(' ')+'" fill="#edf5f8" stroke="#235bb7" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>';
       $('#svgApply').disabled=false;
     }catch(e){$('#svgPreview').textContent=e.message;$('#svgApply').disabled=true;}
   }
@@ -918,7 +922,7 @@
   $('#zoom').oninput=e=>{view.zoom=Number(e.target.value);draw();};$('#zoomOut').onclick=()=>{view.zoom=Math.max(.5,view.zoom/1.2);draw();};$('#zoomIn').onclick=()=>{view.zoom=Math.min(35,view.zoom*1.2);draw();};$('#fit').onclick=fit;
   function download(name,contents,type){const url=URL.createObjectURL(new Blob([contents],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
   $('#exportCsv').onclick=()=>{try{download('testfit-light-room-program.csv',exportProgramCsv(),'text/csv;charset=utf-8');status('Program CSV exported · '+model.rooms.length+' rooms · hatch areas and feet/inches · ≈ marks approximate extents for irregular shapes.');}catch(error){status('Program CSV export failed: '+error.message);}};
-  $('#exportDxf').onclick=()=>{try{const preserveXY=$('#cadCoordinates').value==='saved';download('testfit-light-centerlines.dxf',window.LightCad.exportDxf(model,{preserveXY}),'application/dxf');status('CAD centerlines exported · 1 unit = 1 foot · '+(preserveXY?'saved X/Y preserved.':'Y reversed to match the displayed plan.'));}catch(error){status('CAD export failed: '+error.message);}};
+  $('#exportDxf').onclick=()=>{try{const preserveXY=false;download('testfit-light-centerlines.dxf',window.LightCad.exportDxf(model,{preserveXY}),'application/dxf');status('CAD centerlines exported · 1 unit = 1 foot · '+(preserveXY?'saved X/Y preserved.':'Y reversed to match the displayed plan.'));}catch(error){status('CAD export failed: '+error.message);}};
   $('#save').onclick=()=>{download('testfit-light.json',JSON.stringify(model,null,2),'application/json');status('Editable project saved.');};$('#open').onclick=()=>$('#file').click();
   function validateFile(value){
     if(value?.schema!=='testfit-light'||!Array.isArray(value.rooms)||!Array.isArray(value.groups)||!Array.isArray(value.boundaries)||value.rooms.length>300||value.groups.length>100||value.boundaries.length>100)throw Error('Choose a TestFit Light project (up to 300 rooms and 100 boundaries).');
@@ -933,7 +937,7 @@
     if(Array.isArray(value.boundaryLabels))next.boundaryLabels=value.boundaryLabels.slice(0,100).map(s=>String(s).slice(0,120));
     const cleanId=id=>{if(!Number.isSafeInteger(id)||id<1||id>1e9||ids.has(id))throw Error('Invalid or duplicated project IDs.');ids.add(id);return id;};
     next.groups=value.groups.map(g=>({id:cleanId(g.id),name:String(g.name||'Group').slice(0,48),alignment:g.alignment==='bottom'?'bottom':null,color:/^#[0-9a-f]{6}$/i.test(g.color)?g.color:'#3675c8'}));
-    next.rooms=value.rooms.map(r=>{if(!validDimensions(r)||!['rect','l','custom'].includes(r.shape)||!G.validBoundaryFit(r))throw Error('Invalid room geometry or boundary fit.');const id=cleanId(r.id);return {...r,id,type:'room',shortLabel:String(r.shortLabel||'').slice(0,48),name:String(r.name||'Room').slice(0,48),angle:G.normalize(r.angle),boundaryFit:r.boundaryFit?{side:r.boundaryFit.side,...(r.boundaryFit.manual===true?{manual:true}:{}),...(r.boundaryFit.sides?{sides:[...r.boundaryFit.sides]}:{}),points:r.boundaryFit.points.map(p=>({x:p.x,y:p.y}))}:null,color:/^#[0-9a-f]{6}$/i.test(r.color)?r.color:palette[0],locked:!!r.locked,groupId:next.groups.some(g=>g.id===r.groupId)?r.groupId:null,walls:Array.from({length:r.shape==='custom'?r.boundaryFit.points.length:r.shape==='l'?6:4},(_,i)=>sanitizeWall(r.walls?.[i],next.settings.thickness))};});
+    next.rooms=value.rooms.map(r=>{if(!validDimensions(r)||!['rect','l','custom'].includes(r.shape)||!G.validBoundaryFit(r))throw Error('Invalid room geometry or boundary fit.');const id=cleanId(r.id);return {...r,id,type:'room',shortLabel:String(r.shortLabel||'').slice(0,48),name:String(r.name||'Room').slice(0,48),angle:G.normalize(r.angle),boundaryFit:r.boundaryFit?{side:r.boundaryFit.side,...(r.boundaryFit.manual===true?{manual:true}:{}),...(r.boundaryFit.sides?{sides:[...r.boundaryFit.sides]}:{}),points:r.boundaryFit.points.map(p=>({x:p.x,y:p.y}))}:null,number:String(r.number??'').slice(0,32),color:/^#[0-9a-f]{6}$/i.test(r.color)?r.color:'#ffffff',locked:!!r.locked,groupId:next.groups.some(g=>g.id===r.groupId)?r.groupId:null,walls:Array.from({length:r.shape==='custom'?r.boundaryFit.points.length:r.shape==='l'?6:4},(_,i)=>sanitizeWall(r.walls?.[i],next.settings.thickness))};});
     next.boundaries=value.boundaries.map(b=>{const id=cleanId(b.id);if(!Array.isArray(b.points)||b.points.length>100||!b.points.every(p=>Number.isFinite(p.x)&&Number.isFinite(p.y))||!G.simple(b.points))throw Error('Invalid boundary polygon.');if(b.groupId&&!next.groups.some(g=>g.id===b.groupId))throw Error('Unknown boundary group.');const clean={id,name:String(b.name||'Boundary').slice(0,64),groupId:b.groupId||null,points:b.points.map(p=>({x:p.x,y:p.y}))};if(b.noAccessFaces!==undefined){if(!Array.isArray(b.noAccessFaces)||b.noAccessFaces.some(f=>!['left','bottom','right','top'].includes(f)))throw Error('Invalid facade restriction.');clean.noAccessFaces=[...new Set(b.noAccessFaces)];}if(b.exclusion){const e=b.exclusion;if(b.groupId||typeof e.enabled!=='boolean'||!Array.isArray(e.basePoints)||e.basePoints.length>100||!e.basePoints.every(p=>Number.isFinite(p?.x)&&Number.isFinite(p?.y)))throw Error('Invalid corner exclusion.');const rebuilt=E.setCornerExclusion({...clean,exclusion:e},{});if(!rebuilt||rebuilt.points.length!==clean.points.length||rebuilt.points.some((p,i)=>G.distance(p,clean.points[i])>1e-5))throw Error('Exclusion does not match the boundary.');clean.exclusion=rebuilt.exclusion;}return clean;});
     if(value.corridors!==undefined&&(!Array.isArray(value.corridors)||value.corridors.length>100))throw Error('Use at most 100 corridor paths.');
     next.corridors=(value.corridors||[]).map(c=>{
@@ -964,7 +968,6 @@
   $('#file').onchange=async event=>{try{const file=event.target.files[0];if(!file)return;if(file.size>3e6)throw Error('Project file is too large.');const next=validateFile(JSON.parse(await file.text()));checkpoint();model=next;selected.clear();activeCorridor=activeGroup=selectedWall=selectedDoor=null;isolatedRoom=wallExtension=selectedCorridorSide=null;doorPlacement=drawing=stoppedDrawing=drag=preview=wallPreview=null;syncSettings();render();fit();status(model.settings.boundaryReview?'Project opened with layout conflicts. Nothing moved or removed. Drag rooms into a clear spot; select corridors and drag their edges to refit. Red outlines mark conflicts.':'Project opened.');}catch(error){status('Could not open: '+error.message);}event.target.value='';};
   $('#export').onclick=()=>{try{download('testfit-light-wall-centerlines.svg',window.LightCad.exportWallSvg(model),'image/svg+xml');status('SVG wall centerlines + door leaves and swings exported · no fills, curtains, labels or reference edges · 1 model unit = 1 foot. Check a known length after Rhino import.');}catch(error){status('SVG export failed: '+error.message);}};
   $('#blank').onclick=()=>{checkpoint();model=defaultModel();selected.clear();activeCorridor=selectedWall=selectedDoor=activeGroup=null;isolatedRoom=wallExtension=selectedCorridorSide=null;doorPlacement=drawing=stoppedDrawing=drag=preview=wallPreview=null;syncSettings();render();fit();status('Blank project. Create a room or draw a boundary. Undo restores your previous plan.');};$('#sample').onclick=()=>{checkpoint();sample();syncSettings();};
-  if($('#loadLayout'))$('#loadLayout').onclick=()=>{const variant=$('#layoutChoice').value;checkpoint();sample(variant);syncSettings();};
   let initialSize=true;new ResizeObserver(()=>{const rect=$('#drawing').getBoundingClientRect();size={width:rect.width,height:rect.height};plan.setAttribute('viewBox',`0 0 ${size.width} ${size.height}`);if(initialSize){initialSize=false;fit();}else draw();}).observe($('#drawing'));
   sample();syncSettings();requestAnimationFrame(fit);
   // Small, optional agent interface; ordinary browsers do not need WebMCP.
