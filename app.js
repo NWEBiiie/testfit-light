@@ -37,16 +37,15 @@
     if(!m||(!m[1]&&!m[2]))throw Error('Use feet and inches, such as 12\' 6", or decimal feet.');
     return Number(m[1]||0)+Number(m[2]||0)/12;
   }
-  const approximateDimensions=m=>m.contours.length!==1||Math.abs(m.width*m.depth-m.area)>Math.max(.0001,m.area*1e-6);
-  const dimensionPair=m=>(approximateDimensions(m)?'≈ ':'')+fmtLength(m.width)+' × '+fmtLength(m.depth);
+  const dimensionPair=m=>fmtLength(Math.min(m.width,m.depth))+' × '+fmtLength(Math.max(m.width,m.depth));
   function exportProgramCsv(){
     // Use the live colored footprint, including corridor cutouts, on the room grid.
     // User-entered names are quoted and protected against spreadsheet formulas.
     const cell=value=>{let s=String(value??'');if(/^[\s]*[=+\-@]/.test(s))s="'"+s;return '"'+s.replace(/"/g,'""')+'"';};
-    const rows=[['Room number','Room name','Group','Hatch area (sf)','Dimensions A x B (ft-in)','A (ft-in)','B (ft-in)','Dimension basis','Area basis']];
+    const rows=[['Room number','Room name','Group','Hatch area (sf)','Dimensions A x B (ft-in)']];
     for(const room of model.rooms){
       const m=G.hatchMetrics(room,model.corridors,model.boundaries);
-      rows.push([room.number||'',room.name,getGroup(room.groupId)?.name||'',roundArea(m.area),dimensionPair(m),fmtLength(m.width),fmtLength(m.depth),m.area<=.00001?'No visible hatch':approximateDimensions(m)?'Approximate overall hatch extents along room grid; A x B is not net area':'Rectangular clear hatch; dimensions rounded to nearest inch','Net hatch; walls and corridor cuts excluded; rounded to 0.5 sf']);
+      rows.push([room.number||'',room.name,getGroup(room.groupId)?.name||'',roundArea(m.area),dimensionPair(m)]);
     }
     return '\uFEFF'+rows.map(row=>row.map(cell).join(',')).join('\r\n')+'\r\n';
   }
@@ -923,7 +922,7 @@
   $('#drawCorridor').onclick=()=>beginCorridor();
   $('#zoom').oninput=e=>{view.zoom=Number(e.target.value);draw();};$('#zoomOut').onclick=()=>{view.zoom=Math.max(.5,view.zoom/1.2);draw();};$('#zoomIn').onclick=()=>{view.zoom=Math.min(35,view.zoom*1.2);draw();};$('#fit').onclick=fit;
   function download(name,contents,type){const url=URL.createObjectURL(new Blob([contents],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-  $('#exportCsv').onclick=()=>{try{download('testfit-light-room-program.csv',exportProgramCsv(),'text/csv;charset=utf-8');status('Program CSV exported · '+model.rooms.length+' rooms · hatch areas and feet/inches · ≈ marks approximate extents for irregular shapes.');}catch(error){status('Program CSV export failed: '+error.message);}};
+  $('#exportCsv').onclick=()=>{try{download('testfit-light-room-program.csv',exportProgramCsv(),'text/csv;charset=utf-8');status('CSV exported.');}catch(error){status('Program CSV export failed: '+error.message);}};
   $('#exportDxf').onclick=()=>{try{const preserveXY=false;download('testfit-light-centerlines.dxf',window.LightCad.exportDxf(model,{preserveXY}),'application/dxf');status('CAD centerlines exported · 1 unit = 1 foot · '+(preserveXY?'saved X/Y preserved.':'Y reversed to match the displayed plan.'));}catch(error){status('CAD export failed: '+error.message);}};
   $('#save').onclick=()=>{download('testfit-light.json',JSON.stringify(model,null,2),'application/json');status('Editable project saved.');};$('#open').onclick=()=>$('#file').click();
   function validateFile(value){
