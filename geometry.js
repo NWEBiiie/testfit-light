@@ -441,7 +441,9 @@
   }
   function columnOutline(c){return [{x:c.x-c.width/2,y:c.y-c.depth/2},{x:c.x+c.width/2,y:c.y-c.depth/2},{x:c.x+c.width/2,y:c.y+c.depth/2},{x:c.x-c.width/2,y:c.y+c.depth/2}];}
   // The site polygon is the INTERIOR shell face. All shell mass grows outward.
-  function exteriorWallMass(boundaries,thickness=12,doors=[],portals=[]){
+  // Arrival/discharge markers annotate a location, not a physical opening.
+  // Only resolved hosted doors may cut the shell, including at recessed edges.
+  function exteriorWallMass(boundaries,thickness=12,doors=[]){
     const t=Number(thickness)/12,pieces=[],openings=[],centerlines=[];
     if(!Number.isFinite(t)||t<=0)return {pieces,openings,centerlines};
     for(const site of boundaries.filter(b=>!b.groupId)){
@@ -453,7 +455,6 @@
         if(cross(pu,u)*sign>EPS){const a=add(e.a,mul(po,t)),b=add(e.a,mul(out,t)),m=intersectLines(a,pu,b,u);pieces.push(m&&distance(m,e.a)<=t*8?[e.a,a,m,b]:[e.a,a,b]);}
         if(!facadeEdge(site,e)){
           for(const d of doors){if(Math.abs(cross(u,d.u))>1e-5||distance(d.center,closest(d.center,e.a,e.b))>Math.max(.5,(d.thickness||6)/24+.01))continue;const at=dot(sub(d.center,e.a),u);holes.push([Math.max(0,at-d.width/2),Math.min(len,at+d.width/2)]);}
-          for(const p of portals){if(distance(p,closest(p,e.a,e.b))>.01)continue;const at=dot(sub(p,e.a),u),half=(p.clearWidth||3)/2;holes.push([Math.max(0,at-half),Math.min(len,at+half)]);}
         }
         for(const [lo,hi] of holes.filter(([a,b])=>b>a)){const a=add(e.a,mul(u,lo)),b=add(e.a,mul(u,hi));openings.push([sub(a,mul(out,.01)),sub(b,mul(out,.01)),add(b,mul(out,t+.01)),add(a,mul(out,t+.01))]);}
         const centerA=add(e.a,mul(out,t/2)),next=es[(e.index+1)%es.length];

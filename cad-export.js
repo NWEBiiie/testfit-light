@@ -24,7 +24,7 @@
         result.push({type:'ARC',layer:'DOOR_SWINGS',center,radius:G.distance(leaf.hinge,leaf.tip),start:angle(ccw?closed:open),end:angle(ccw?open:closed)});
       }
     }
-    const shell=G.exteriorWallMass(model.boundaries||[],model.settings?.exteriorThickness??12,doors,model.portals||[]);
+    const shell=G.exteriorWallMass(model.boundaries||[],model.settings?.exteriorThickness??12,doors);
     for(const e of shell.centerlines)line('EXTERIOR_WALL_CENTERLINES',e.a,e.b);
     for(const e of G.unionBoundarySegments(shell.pieces,shell.openings))line('EXTERIOR_WALL_FACES',e.a,e.b);
     for(const b of model.boundaries||[])for(const e of G.edges(b.points))line('BOUNDARY',e.a,e.b);
