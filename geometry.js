@@ -269,7 +269,9 @@
       const u=unit(sub(edge.b,edge.a)),normal=inward(edge,poly);
       const targets=columnSnapTargets(options);
       if(options.roomSnap!==false)for(const room of rooms){const rp=polygon(room);
-        for(const wall of wallNetwork([room])){const side=edges(rp)[wall.source.side],outward=mul(inward(side,rp),-1),solidHalf=(wall.style.thickness||6)/24,half=['curtain','opening','window'].includes(wall.style.kind)?-surfaceOffset(wall.style):options.solidWallSnap==='middle'?0:options.solidWallSnap==='inner'?-solidHalf:solidHalf;
+        // A corridor's clear edge meets the physical wall face. The solid-wall
+        // reference selector applies to room edits, not the circulation void.
+        for(const wall of wallNetwork([room])){const side=edges(rp)[wall.source.side],outward=mul(inward(side,rp),-1),solidHalf=(wall.style.thickness||6)/24,half=['curtain','opening','window'].includes(wall.style.kind)?-surfaceOffset(wall.style):solidHalf;
           targets.push({edge:{a:add(wall.a,mul(outward,half)),b:add(wall.b,mul(outward,half))},normal:outward,kind:'neighbor'});
         }
       }
