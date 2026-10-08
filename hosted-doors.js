@@ -20,8 +20,9 @@
   function subtract(ranges,lo,hi){
     return ranges.flatMap(([a,b])=>hi<=a||lo>=b?[[a,b]]:[[a,Math.max(a,lo)],[Math.min(b,hi),b]].filter(([x,y])=>y-x>1e-6));
   }
-  function runs(door,entities,network,doors=[]){
+  function runs(door,entities,network,doors=[],boundaries=[]){
     const f=frame(door,entities);if(!f)return [];
+    if(f.host.type==='corridor')network=network.concat(G.corridorDoorWalls(entities.filter(e=>e.type==='corridor'),boundaries));
     const at=p=>dot(sub(p,f.edge.a),f.u);
     const spans=network.filter(w=>!w.noAccess&&w.style.kind==='wall'&&w.owners.some(o=>o.roomId===door.hostId&&o.side===door.side))
       .map(w=>[Math.min(at(w.a),at(w.b)),Math.max(at(w.a),at(w.b))]).sort((a,b)=>a[0]-b[0]);
@@ -38,20 +39,22 @@
     doors.filter(d=>d.id!==door.id).forEach(d=>{
       const other=opening(d,entities);if(!other||Math.abs(cross(f.u,other.u))>1e-5||Math.abs(cross(f.u,sub(other.center,f.edge.a)))>.02)return;
       // Ignore inserts temporarily covered by a corridor or an open wall.
-      if(!runs(d,entities,network).some(([a,b])=>other.offset-other.width/2>=a+.049&&other.offset+other.width/2<=b-.049))return;
+      if(!runs(d,entities,network,[],boundaries).some(([a,b])=>other.offset-other.width/2>=a+.049&&other.offset+other.width/2<=b-.049))return;
       merged=subtract(merged,Math.min(at(other.a),at(other.b))-.1,Math.max(at(other.a),at(other.b))+.1);
     });
     return merged;
   }
-  function place(door,entities,network,doors=[]){
+  function place(door,entities,network,doors=[],boundaries=[]){
     const f=frame(door,entities);if(!f||!Number.isFinite(door.width)||door.width<.5||door.width>12||!Number.isFinite(door.position))return null;
     const target=door.position*f.length;
-    const choices=runs(door,entities,network,doors).filter(([a,b])=>b-a>=door.width+.1-1e-6)
+    const choices=runs(door,entities,network,doors,boundaries).filter(([a,b])=>b-a>=door.width+.1-1e-6)
       .map(([a,b])=>Math.max(a+door.width/2+.05,Math.min(b-door.width/2-.05,target))).sort((a,b)=>Math.abs(a-target)-Math.abs(b-target));
     return choices.length?{...door,position:choices[0]/f.length}:null;
   }
-  function autoPlace(door,entities,network,doors=[]){
+  function autoPlace(door,entities,network,doors=[],boundaries=[]){
     const f=frame(door,entities);if(!f||!Number.isFinite(door.position)||!Number.isFinite(door.width)||door.width<.5||door.width>12)return null;
+    const physicalNetwork=network;
+    if(f.host.type==='corridor')network=network.concat(G.corridorDoorWalls(entities.filter(e=>e.type==='corridor'),boundaries));
     const target=door.position*f.length,at=p=>dot(sub(p,f.edge.a),f.u),perpendicular=[];
     // Use the physical wall face, not its centerline, for the six-inch jamb
     // clearance. Room corners and perpendicular T-junctions both count.
@@ -62,7 +65,7 @@
       if(offset<-.02||offset>f.length+.02||distance(q,G.closest(q,w.a,w.b))>.015)continue;
       perpendicular.push({offset,half:(w.style.thickness||6)/24});
     }
-    let ranges=runs(door,entities,network,doors);
+    let ranges=runs(door,entities,physicalNetwork,doors,boundaries);
     for(const wall of perpendicular)ranges=subtract(ranges,wall.offset-wall.half-.45,wall.offset+wall.half+.45);
     // The ordinary 0.05-ft insertion tolerance makes .45 + .05 = .50 ft.
     const choices=ranges.filter(([a,b])=>b-a>=door.width+.1-1e-6).map(([a,b])=>Math.max(a+door.width/2+.05,Math.min(b-door.width/2-.05,target))).sort((a,b)=>Math.abs(a-target)-Math.abs(b-target));
@@ -73,17 +76,24 @@
     const swing=dot(G.rotate(closedDirection,90),inward)>=0?1:-1;
     return {...door,position:offset/f.length,hinge,swing};
   }
-  function resolve(door,entities,network,doors=[]){
+  function resolve(door,entities,network,doors=[],boundaries=[]){
     const o=opening(door,entities);if(!o)return null;
-    if(!runs(door,entities,network,doors).some(([a,b])=>o.offset-o.width/2>=a+.049&&o.offset+o.width/2<=b-.049))return null;
+    if(!runs(door,entities,network,doors,boundaries).some(([a,b])=>o.offset-o.width/2>=a+.049&&o.offset+o.width/2<=b-.049))return null;
+    if(o.host.type==='corridor'){
+      // If a real partition adjoins this edge, draw/cut on its centerline.
+      // Otherwise this is a freestanding corridor-door insert, not a new wall.
+      const adjacent=network.filter(w=>w.style.kind==='wall'&&!w.noAccess&&Math.abs(cross(o.u,unit(sub(w.b,w.a))))<1e-5&&distance(o.center,G.closest(o.center,w.a,w.b))<=(w.style.thickness||6)/24+.02&&[o.a,o.b].every(p=>distance(p,G.closest(p,w.a,w.b))<=(w.style.thickness||6)/24+.02)).sort((a,b)=>distance(o.center,G.closest(o.center,a.a,a.b))-distance(o.center,G.closest(o.center,b.a,b.b)))[0];
+      if(adjacent){const shift=sub(G.closest(o.center,adjacent.a,adjacent.b),o.center);return {...o,...Object.fromEntries(['a','b','center','hinge','tip'].map(key=>[key,add(o[key],shift)])),thickness:adjacent.style.thickness||6};}
+      return {...o,thickness:6};
+    }
     const relevant=network.filter(w=>w.owners.some(p=>p.roomId===door.hostId&&p.side===door.side)&&
       Math.max(dot(sub(w.a,o.edge.a),o.u),dot(sub(w.b,o.edge.a),o.u))>o.offset-o.width/2&&
       Math.min(dot(sub(w.a,o.edge.a),o.u),dot(sub(w.b,o.edge.a),o.u))<o.offset+o.width/2);
     return {...o,thickness:Math.max(1,...relevant.map(w=>w.style.thickness))};
   }
-  function resolveAll(doors,entities,network){
+  function resolveAll(doors,entities,network,boundaries=[]){
     const result=[];
-    doors.forEach(d=>{const o=resolve(d,entities,network);if(o&&!result.some(p=>Math.abs(cross(p.u,o.u))<1e-5&&Math.abs(cross(p.u,sub(o.center,p.center)))<.02&&Math.abs(dot(sub(o.center,p.center),p.u))<(o.width+p.width)/2+.099))result.push(o);});
+    doors.forEach(d=>{const o=resolve(d,entities,network,[],boundaries);if(o&&!result.some(p=>Math.abs(cross(p.u,o.u))<1e-5&&Math.abs(cross(p.u,sub(o.center,p.center)))<.02&&Math.abs(dot(sub(o.center,p.center),p.u))<(o.width+p.width)/2+.099))result.push(o);});
     return result;
   }
   function migrate(model){

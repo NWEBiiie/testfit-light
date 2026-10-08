@@ -110,7 +110,7 @@
       const clean=cleanedRoom(entity,points,side);if(!clean)return null;
       const next=clean.next,limits=boundaries.filter(b=>!b.groupId||b.groupId===entity.groupId);
       if(next.width<2||next.depth<2||next.width>500||next.depth>500||!G.validBoundaryFit(next)||!G.validPlacement(next,others.filter(e=>e.type!=='corridor'),limits))return null;
-      const paths=others.filter(e=>e.type==='corridor'),loss=r=>G.area(polygon(r))-G.contourArea(G.roomContours(r,paths,boundaries));
+      const paths=others.filter(e=>e.type==='corridor'),loss=r=>G.contourArea(G.roomFillContours(r,[],boundaries))-G.contourArea(G.roomFillContours(r,paths,boundaries));
       if(loss(next)>loss(entity)+.0001)return null;
       return {...clean,entities:entities.map(e=>e.id===next.id?next:e),offset:amount,normal,changedIds:[entity.id],reshaped:true};
     }
@@ -196,7 +196,7 @@
       const next={...G.withManualOutline({...entity,shape:'custom'},outline),walls:styles};
       const others=entities.filter(e=>e.id!==entity.id),limits=boundaries.filter(b=>!b.groupId||b.groupId===entity.groupId);
       if(next.width<2||next.depth<2||next.width>500||next.depth>500||!G.validBoundaryFit(next)||!G.validPlacement(next,others.filter(e=>e.type!=='corridor'),limits))return null;
-      const corridors=others.filter(e=>e.type==='corridor'),loss=r=>G.area(polygon(r))-G.contourArea(G.roomContours(r,corridors,boundaries));
+      const corridors=others.filter(e=>e.type==='corridor'),loss=r=>G.contourArea(G.roomFillContours(r,[],boundaries))-G.contourArea(G.roomFillContours(r,corridors,boundaries));
       if(loss(next)>loss(entity)+.0001)return null;
       return {entities:entities.map(e=>e.id===next.id?next:e),offset:amount,normal:n,reference:{roomId:entity.id,side:movedSide},changedIds:[entity.id],sideMapping:{roomId:entity.id,edges:mapping},reshaped:true};
     }
@@ -205,14 +205,17 @@
     if(!result)return {error:'This extension would overlap a room, corridor, or boundary.'};
     const margin=options.margin??2,candidates=[],others=entities.filter(e=>e.id!==entity.id);
     const targets=[];
-    if(options.roomSnap!==false)others.forEach(e=>edges(polygon(e)).forEach(edge=>targets.push({edge,kind:e.type==='corridor'?'corridor':'neighbor'})));
+    if(options.roomSnap!==false)others.forEach(e=>edges(polygon(e)).forEach(edge=>targets.push({edge,neighbor:e,kind:e.type==='corridor'?'corridor':'neighbor'})));
     if(options.boundarySnap!==false)boundaries.filter(b=>!b.groupId||b.groupId===entity.groupId).forEach(b=>edges(b.points).forEach(edge=>targets.push({edge,kind:'boundary'})));
     G.columnSnapTargets(options).filter(t=>dot(t.normal,n)<-.99999).forEach(t=>targets.push(t));
     for(const t of targets){const v=unit(sub(t.edge.b,t.edge.a));if(Math.abs(cross(v,u))>1e-5)continue;
       const range=[t.edge.a,t.edge.b].map(p=>dot(sub(p,edge.a),u));
       if(Math.min(to*len,Math.max(...range))-Math.max(from*len,Math.min(...range))<.05)continue;
       const spec=entity.walls?.[side],at=(from+to)/2,finish=(spec?.segments||[]).filter(s=>s.from<=at&&s.to>=at).sort((a,b)=>(b.revision||0)-(a.revision||0))[0]||spec;
-      const snap=dot(sub(t.edge.a,edge.a),n)-(t.kind==='column'&&!t.center?(finish?.thickness||6)/24:0),cost=Math.abs(snap-result.offset);if(cost<=margin)candidates.push({...t,snap,cost});
+      const sourceOffset=G.snapFaceOffset(entity,side,at),targetOffset=t.kind==='neighbor'?G.snapFaceOffset(t.neighbor,t.edge.index):0,special=['curtain','opening','window'].includes(finish?.kind)||t.kind==='neighbor'&&['curtain','opening','window'].includes(G.faceStyle(t.neighbor,t.edge.index).kind);
+      const facing=t.neighbor?dot(n,G.inward(t.edge,polygon(t.neighbor))):1;
+      const allowance=t.kind==='column'&&t.center?0:t.kind==='column'||t.kind==='corridor'?sourceOffset:t.kind==='neighbor'&&facing<-.99999?sourceOffset-targetOffset:special?sourceOffset+targetOffset:0;
+      const snap=dot(sub(t.edge.a,edge.a),n)-allowance,cost=Math.abs(snap-result.offset);if(cost<=margin)candidates.push({...t,snap,cost});
     }
     for(const c of candidates.sort((a,b)=>a.cost-b.cost)){const snap=attempt(c.snap);if(snap&&snap.reshaped)return {...snap,snapped:true,snapKind:c.kind,snapGuide:c.edge};}
     return {...result,limited:Math.abs(amount-offset)>.001};

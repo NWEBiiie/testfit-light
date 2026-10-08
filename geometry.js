@@ -264,7 +264,7 @@
       const u=unit(sub(edge.b,edge.a)),normal=inward(edge,poly);
       const targets=columnSnapTargets(options);
       if(options.roomSnap!==false)for(const room of rooms){const rp=polygon(room);
-        for(const wall of edges(rp)){const outward=mul(inward(wall,rp),-1),half=faceThickness(room,wall.index)/24;
+        for(const wall of wallNetwork([room])){const side=edges(rp)[wall.source.side],outward=mul(inward(side,rp),-1),half=['curtain','opening','window'].includes(wall.style.kind)?-surfaceOffset(wall.style):(wall.style.thickness||6)/24;
           targets.push({edge:{a:add(wall.a,mul(outward,half)),b:add(wall.b,mul(outward,half))},normal:outward,kind:'neighbor'});
         }
       }
@@ -310,19 +310,29 @@
     const wall=room.walls?.[side];
     return (wall?.segments||[]).filter(s=>at>=s.from-EPS&&at<=s.to+EPS).sort((a,b)=>(b.revision||0)-(a.revision||0))[0]?.kind||wall?.kind||'wall';
   }
+  function faceStyle(room,side,at=.5){
+    const wall=room.walls?.[side]||{kind:'wall',thickness:6};
+    const edit=(wall.segments||[]).filter(s=>at>=s.from-EPS&&at<=s.to+EPS).sort((a,b)=>(b.revision||0)-(a.revision||0))[0];
+    return edit?{...wall,...edit}:wall;
+  }
+  // Signed distance from wall axis to its visible outward snap face.
+  function snapFaceOffset(room,side,at=.5,fallback=6){const spec=faceStyle(room,side,at);return ['curtain','opening','window'].includes(spec.kind)?-surfaceOffset({...spec,thickness:faceThickness(room,side,at,fallback)}):faceThickness(room,side,at,fallback)/24;}
+  const surfaceOffset=spec=>['curtain','opening','window'].includes(spec.kind)?(['curtain','opening'].includes(spec.kind)&&spec.face==='interior'?1:-1)*(spec.thickness||6)/24:0;
   function roomFillContours(room,corridors=[],boundaries=[]) {
     const network=wallNetwork([room],6,boundaries);
+    const insets=[];
     const pieces=[offsetOutline(polygon(room),edges(polygon(room)).map(e=>{
       const shell=network.find(w=>w.shell&&w.owners.some(o=>o.side===e.index)&&Math.abs(w.length-distance(e.a,e.b))<1e-6);
-      return shell?-distance(shell.a,shell.shell.a):['curtain','opening','window'].includes(faceKind(room,e.index))?-faceThickness(room,e.index)/24:0;
+      const spans=network.filter(w=>w.owners.some(o=>o.side===e.index)),offsets=spans.map(w=>surfaceOffset(w.style));
+      return shell?-distance(shell.a,shell.shell.a):offsets.length&&offsets.every(v=>Math.abs(v-offsets[0])<EPS)?offsets[0]:0;
     }))];
     for(const wall of network){
       if(wall.shell){pieces.push([wall.a,wall.b,wall.shell.b,wall.shell.a]);continue;}
       if(!['curtain','opening','window'].includes(wall.style.kind))continue;
       const face=curtainFace(wall,[room]);
-      pieces.push([wall.a,wall.b,face.b,face.a]);
+      (surfaceOffset(wall.style)>0?insets:pieces).push([wall.a,wall.b,face.b,face.a]);
     }
-    return unionOutline(pieces,corridorCuts(corridors,boundaries));
+    return unionOutline(pieces,insets.concat(corridorCuts(corridors,boundaries)));
   }
   function roomContours(room,corridors=[],boundaries=[]) {
     const poly=polygon(room),cuts=corridorCuts(corridors,boundaries).filter(p=>overlaps(poly,p));
@@ -352,15 +362,18 @@
     const poly=polygon(room),sides=edges(poly),margin=options.margin??2,target=area(baseOutline(room));
     const sources=[];
     if(options.boundarySnap!==false)boundaries.forEach(b=>edges(b.points).forEach(edge=>sources.push({edge,normal:inward(edge,b.points)})));
-    if(options.roomSnap!==false)others.forEach(r=>{const p=polygon(r);edges(p).forEach(edge=>sources.push({edge,normal:mul(inward(edge,p),-1)}));});
+    if(options.roomSnap!==false)others.forEach(r=>{const p=polygon(r);edges(p).forEach(edge=>sources.push({edge,normal:mul(inward(edge,p),-1),neighbor:r}));});
     const matches=[];
     sides.forEach(side=>sources.forEach(source=>{
-      const {edge,normal}=source,u=unit(sub(edge.b,edge.a));
+      const {normal,neighbor}=source,u=unit(sub(source.edge.b,source.edge.a));
+      const special=['curtain','opening','window'].includes(faceKind(room,side.index))||neighbor&&['curtain','opening','window'].includes(faceKind(neighbor,source.edge.index));
+      const allowance=neighbor?.type==='corridor'?snapFaceOffset(room,side.index)-(neighbor.snapClearances?.[source.edge.index]??neighbor.snapClearance??0):neighbor&&special?snapFaceOffset(room,side.index)+snapFaceOffset(neighbor,source.edge.index):0;
+      const edge={...source.edge,a:add(source.edge.a,mul(normal,allowance)),b:add(source.edge.b,mul(normal,allowance))};
       if(dot(inward(side,poly),normal)<.65)return;
       const interval=[side.a,side.b].map(p=>dot(sub(p,edge.a),u));
       if(Math.min(Math.max(...interval),distance(edge.a,edge.b))-Math.max(0,Math.min(...interval))<.05)return;
       const gap=Math.max(...[side.a,side.b].map(p=>Math.abs(dot(sub(p,edge.a),normal))));
-      if(gap<=margin+EPS)matches.push({...source,side:side.index,gap});
+      if(gap<=margin+EPS)matches.push({...source,edge,side:side.index,gap});
     }));
     const contacts=matches.filter(m=>m.gap<.001);
     if(!contacts.length||new Set(contacts.map(c=>c.side)).size>=2)return null;
@@ -390,10 +403,14 @@
     }
     return candidates.sort((a,b)=>a.cost-b.cost)[0]||null;
   }
+  function corridorSnapBarrier(room,c){
+    const rp=polygon(room),cp=polygon(c),snapClearances=edges(cp).map(e=>{const n=mul(inward(e,cp),-1),side=edges(rp).find(f=>dot(inward(f,rp),n)>.99999);return side?snapFaceOffset(room,side.index):0;});
+    return {...c,outline:offsetOutline(cp,snapClearances.map(v=>-v)),snapClearances};
+  }
   function settle(room,others,boundaries,options={}) {
     if(!options.corridorFaces){
-      const clearance=Math.max(0,...(room.walls||[]).map(w=>w.kind==='opening'||w.kind==='curtain'?0:(w.thickness||6)/24));
-      others=others.map(c=>c.type==='corridor'?{...c,outline:offsetOutline(polygon(c),-clearance),snapClearance:clearance}:c);
+
+      others=others.map(c=>c.type==='corridor'?corridorSnapBarrier(room,c):c);
       options={...options,corridorFaces:true};
     }
     if(room.boundaryFit?.manual){
@@ -420,7 +437,7 @@
   }
   function interiorOutline(room){
     return offsetOutline(polygon(room),edges(polygon(room)).map(e=>{
-      const wall=room.walls?.[e.index];return (['curtain','opening','window'].includes(faceKind(room,e.index))?-1:1)*faceThickness(room,e.index)/24;
+      const spec=faceStyle(room,e.index);return ['curtain','opening','window'].includes(spec.kind)?surfaceOffset(spec):faceThickness(room,e.index)/24;
     }));
   }
   function curtainFace(wall,entities){
@@ -428,12 +445,13 @@
     if(!room)return {a:wall.a,b:wall.b};
     const poly=polygon(room),edge=edges(poly)[owner.side];
     if(!edge)return {a:wall.a,b:wall.b};
-    const shift=mul(inward(edge,poly),-(wall.style.thickness||6)/24);
+    const shift=mul(inward(edge,poly),surfaceOffset(wall.style));
     const face={a:add(wall.a,shift),b:add(wall.b,shift)},all=edges(poly);
     for(const key of ['a','b'])for(const index of [(owner.side+all.length-1)%all.length,(owner.side+1)%all.length]){
       const adj=all[index];
       if(!['curtain','opening','window'].includes(faceKind(room,index,distance(wall[key],adj.a)<distance(wall[key],adj.b)?0:1))||Math.min(distance(wall[key],adj.a),distance(wall[key],adj.b))>.02)continue;
-      const line=add(adj.a,mul(inward(adj,poly),-faceThickness(room,index)/24));
+      const at=distance(wall[key],adj.a)<distance(wall[key],adj.b)?0:1;
+      const line=add(adj.a,mul(inward(adj,poly),surfaceOffset(faceStyle(room,index,at))));
       const corner=intersectLines(face.a,sub(edge.b,edge.a),line,sub(adj.b,adj.a));
       if(corner&&distance(corner,face[key])<2)face[key]=corner;
     }
@@ -485,13 +503,13 @@
           if(overlap>margin||overlap < -margin||Math.min(...[side.a,side.b].flatMap(a=>[e.a,e.b].map(b=>distance(a,b))))>margin*Math.SQRT2+EPS)continue;
         }else if(overlap<.05)continue;
         const ends=continuation?[side.a,side.b].flatMap((a,i)=>[e.a,e.b].map((b,j)=>({i,j,gap:distance(a,b)}))).sort((a,b)=>a.gap-b.gap)[0]:null;
-        const sourceHalf=faceThickness(room,side.index,ends?.i??.5,options.thickness)/24;
-        const targetHalf=neighbor&&neighbor.type!=='corridor'?faceThickness(neighbor,e.index,ends?.j??.5,options.thickness)/24:0;
+        const sourceHalf=snapFaceOffset(room,side.index,ends?.i??.5,options.thickness);
+        const targetHalf=neighbor&&neighbor.type!=='corridor'?snapFaceOffset(neighbor,e.index,ends?.j??.5,options.thickness):0;
         const sourceExterior=['curtain','opening','window'].includes(faceKind(room,side.index));
         const targetExterior=neighbor&&['curtain','opening','window'].includes(faceKind(neighbor,e.index));
         // settle already offsets corridor barriers to the outside wall face.
         // Only apply the remaining allowance, never the wall thickness twice.
-        const faceOffset=column?(options.columnSnapMode==='center'?0:-sourceHalf):continuation?sourceHalf-targetHalf:neighbor?.type==='corridor'? (neighbor.snapClearance||0)-sourceHalf:sourceExterior||targetExterior?-(sourceHalf+targetHalf):0;
+        const faceOffset=column?(options.columnSnapMode==='center'?0:-sourceHalf):continuation?sourceHalf-targetHalf:neighbor?.type==='corridor'? (neighbor.snapClearances?.[e.index]??neighbor.snapClearance??0)-sourceHalf:neighbor&&(sourceExterior||targetExterior)?-(sourceHalf+targetHalf):0;
         const gap=dot(sub(side.a,e.a),n)+faceOffset;
         if(Math.abs(gap)<=margin+EPS)matches.push({n,gap,side,e,continuation});
       }
@@ -506,7 +524,7 @@
     for(const delta of moves){
       if(length(delta)<.00001||length(delta)>margin*Math.SQRT2+EPS||existing.some(c=>Math.abs(dot(delta,c.n))>.001))continue;
       const moved=rooms.map(r=>({...r,x:r.x+delta.x,y:r.y+delta.y}));
-      if(!moved.every(r=>validPlacement(r,others,boundaries.filter(b=>!b.groupId||b.groupId===r.groupId))))continue;
+      if(!moved.every(r=>validPlacement(r,others.map(c=>c.type==='corridor'&&!c.snapClearances?corridorSnapBarrier(r,c):c),boundaries.filter(b=>!b.groupId||b.groupId===r.groupId))))continue;
       const contacts=matches.filter(c=>{
         if(Math.abs(c.gap+dot(delta,c.n))>=.001)return false;
         const u=unit(sub(c.e.b,c.e.a)),span=[c.side.a,c.side.b].map(p=>dot(sub(add(p,delta),c.e.a),u)),overlap=Math.min(Math.max(...span),distance(c.e.a,c.e.b))-Math.max(0,Math.min(...span));
@@ -553,11 +571,11 @@
     const edgeFor=room=>{const poly=polygon(room),direction=rotate([{x:0,y:-1},{x:1,y:0},{x:0,y:1},{x:-1,y:0}][side],room.angle);
       return edges(poly).filter(e=>dot(mul(inward(e,poly),-1),direction)>.65).sort((a,b)=>dot(b.a,direction)-dot(a.a,direction))[0];};
     const first=rooms[0],reference=edgeFor(first);if(!reference)return null;
-    const n=mul(inward(reference,polygon(first)),-1),target=dot(reference.a,n)+faceThickness(first,reference.index,.5,defaultThickness)/24;
+    const n=mul(inward(reference,polygon(first)),-1),target=dot(reference.a,n)+snapFaceOffset(first,reference.index,.5,defaultThickness);
     const result=[];
     for(const room of rooms){
       const edge=edgeFor(room);if(!edge||dot(mul(inward(edge,polygon(room)),-1),n)<.99999)return null;
-      const shift=target-dot(edge.a,n)-faceThickness(room,edge.index,.5,defaultThickness)/24;
+      const shift=target-dot(edge.a,n)-snapFaceOffset(room,edge.index,.5,defaultThickness);
       if(room.locked&&Math.abs(shift)>.00001)return null;
       const delta=mul(n,shift),next={...room,x:room.x+delta.x,y:room.y+delta.y};
       // Boundary-fitted walls must stay attached rather than sliding off the shell.
@@ -698,7 +716,7 @@
         const style={kind:'wall',thickness:defaultThickness,...source.style},previous=walls.at(-1);
         // Finish bookkeeping is not a physical joint. Collapse identical runs
         // while preserving real changes in ownership, thickness or openings.
-        const finish=s=>JSON.stringify([s.kind||'wall',s.thickness||defaultThickness]);
+        const finish=s=>JSON.stringify([s.kind||'wall',s.thickness||defaultThickness,s.face||'exterior']);
         if(previous&&previous.owners.map(o=>o.roomId+':'+o.side).sort().join('|')===ownerKey&&
           distance(previous.b,point(lo))<1e-7&&Math.abs(cross(unit(sub(previous.b,previous.a)),line.u))<1e-7&&
           style.kind!=='door'&&finish(previous.style)===finish(style)){
@@ -710,6 +728,27 @@
     return boundaryWallContacts(walls,rooms,boundaries);
   }
   // The site outline is a finished interior face, not another partition axis.
+  // Door-only corridor hosts: never include these guides in physical wall mass.
+  function corridorDoorWalls(corridors,boundaries=[]){
+    const result=[];
+    for(const c of corridors)for(const edge of edges(polygon(c))){
+      const delta=sub(edge.b,edge.a),len=length(delta),stops=[0,1];
+      if(len<EPS)continue;
+      const others=corridors.filter(p=>p.id!==c.id).map(polygon);
+      for(const poly of others)for(const e of edges(poly)){
+        const q=intersectLines(edge.a,delta,e.a,sub(e.b,e.a));
+        if(q&&distance(q,closest(q,e.a,e.b))<EPS){const t=dot(sub(q,edge.a),delta)/dot(delta,delta);if(t>EPS&&t<1-EPS)stops.push(t);}
+      }
+      stops.sort((a,b)=>a-b);
+      for(let i=0;i<stops.length-1;i++){
+        const lo=stops[i],hi=stops[i+1],mid=add(edge.a,mul(delta,(lo+hi)/2));
+        if((hi-lo)*len<EPS||others.some(p=>inside(mid,p,false)))continue;
+        const style={kind:'wall',thickness:6},owner={roomId:c.id,entityType:'corridor',side:edge.index,a:edge.a,b:edge.b,style};
+        result.push({id:'corridor-door:'+c.id+':'+edge.index+':'+lo,a:add(edge.a,mul(delta,lo)),b:add(edge.a,mul(delta,hi)),length:(hi-lo)*len,style,owners:[owner],source:owner,doorOnly:true});
+      }
+    }
+    return boundaryWallContacts(result,corridors,boundaries);
+  }
   // Retain editable/door host geometry; suppress only parallel contact spans.
   function boundaryWallContacts(walls,rooms,boundaries){
     const sites=boundaries.filter(b=>!b.groupId&&b.points?.length>=3);
@@ -785,8 +824,8 @@
         if(e.width<2||e.depth<2||e.width>500||e.depth>500||!validBoundaryFit(e)||!validPlacement(e,rooms.filter(r=>r.id!==e.id),boundaries.filter(b=>!b.groupId||b.groupId===e.groupId)))return null;
         const old=entities.find(r=>r.id===e.id);
         const fixedPaths=paths.filter(p=>!changed.has(p.id));
-        const oldLoss=area(polygon(old))-contourArea(roomContours(old,fixedPaths,boundaries));
-        const newLoss=area(polygon(e))-contourArea(roomContours(e,fixedPaths,boundaries));
+        const oldLoss=contourArea(roomFillContours(old,[],boundaries))-contourArea(roomFillContours(old,fixedPaths,boundaries));
+        const newLoss=contourArea(roomFillContours(e,[],boundaries))-contourArea(roomFillContours(e,fixedPaths,boundaries));
         if(newLoss>oldLoss+.0001)return null;
       }
       return result;
@@ -820,7 +859,7 @@
     if(options.roomSnap!==false)wallNetwork(entities,options.thickness??6).forEach(w=>{
       if(w.owners.some(o=>changed.has(o.roomId)))return;
       const owner=w.source,neighbor=entities.find(e=>e.id===owner.roomId),poly=polygon(neighbor);
-      targets.push({edge:{a:w.a,b:w.b},normal:mul(inward(edges(poly)[owner.side],poly),-1),thickness:w.style.thickness,kind:'neighbor'});
+      targets.push({edge:{a:w.a,b:w.b},normal:mul(inward(edges(poly)[owner.side],poly),-1),thickness:w.style.thickness,faceOffset:['curtain','opening','window'].includes(w.style.kind)?-surfaceOffset(w.style):w.style.thickness/24,special:['curtain','opening','window'].includes(w.style.kind),kind:'neighbor'});
     });
     if(options.roomSnap!==false)corridorCuts(entities.filter(e=>e.type==='corridor'&&!changed.has(e.id)),boundaries).forEach(poly=>edges(poly).forEach(e=>targets.push({edge:e,normal:mul(inward(e,poly),-1),thickness:0,kind:'corridor'})));
     if(options.boundarySnap!==false)boundaries.filter(b=>!b.groupId||b.groupId===entity.groupId).forEach(b=>
@@ -843,12 +882,12 @@
       const facing=dot(mul(n,-1),target.normal),continuation=target.kind==='neighbor'&&facing<-.99999;
       if(facing<.99999&&!continuation||!nearby(current,e,continuation))continue;
       const end=[current.a,current.b].map((a,i)=>({i,gap:Math.min(distance(a,e.a),distance(a,e.b))})).sort((a,b)=>a.gap-b.gap)[0].i;
-      const sourceThickness=faceThickness(entity,reference.side,end,options.thickness??6);
+      const at=Number.isFinite(reference.at)?reference.at:end,sourceThickness=faceThickness(entity,reference.side,at,options.thickness??6),sourceOffset=snapFaceOffset(entity,reference.side,at,options.thickness??6),sourceSpecial=['curtain','opening','window'].includes(faceKind(entity,reference.side,at));
       // Same-facing adjacent walls align their outside faces, even if their
       // thickness differs. Opposing walls meet on one shared centerline.
-      const faceOffset=target.kind==='column'&&target.center?0:target.kind==='corridor'||target.kind==='column'?-sourceThickness/24:continuation?(target.thickness-sourceThickness)/24:0;
+      const faceOffset=target.kind==='column'&&target.center?0:target.kind==='corridor'||target.kind==='column'?-sourceOffset:continuation?(target.faceOffset-sourceOffset):target.kind==='neighbor'&&(sourceSpecial||target.special)?-sourceOffset-target.faceOffset:0;
       const amount=dot(sub(e.a,original.a),n)+faceOffset,cost=Math.abs(amount-base.offset);
-      if(cost<=margin+EPS)candidates.push({...target,amount,cost,continuation,sourceThickness});
+      if(cost<=margin+EPS)candidates.push({...target,amount,cost,continuation,sourceThickness,sourceOffset,sourceSpecial});
     }
     candidates.sort((a,b)=>a.cost-b.cost);
     for(const candidate of candidates){
@@ -856,7 +895,7 @@
       if(result.error)continue;
       const side=edges(polygon(result.entities.find(e=>e.id===entity.id)))[reference.side];
       if(!nearby(side,candidate.edge,candidate.continuation))continue;
-      const axis=unit(sub(side.b,side.a)),origin=add(side.a,mul(n,candidate.continuation?candidate.sourceThickness/24:0));
+      const axis=unit(sub(side.b,side.a)),origin=add(side.a,mul(n,candidate.continuation||candidate.sourceSpecial?candidate.sourceOffset:0));
       const span=[side.a,side.b,candidate.edge.a,candidate.edge.b].map(p=>dot(sub(p,origin),axis));
       return {...result,snapped:true,snapKind:candidate.kind,snapGuide:{a:add(origin,mul(axis,Math.min(...span)-.5)),b:add(origin,mul(axis,Math.max(...span)+.5))}};
     }
@@ -925,10 +964,10 @@
     walls.forEach(w=>{
       if(w.shell||!['wall','door'].includes(w.style.kind))return;
       const half=Math.max(minThickness,w.style.thickness/12)/2;
-      pieces.push(strip(w.a,w.b,half));
-      // Curtain fronts sit on the exterior face. Carry adjoining partition
-      // end caps to that same face, without moving the room or its doors.
-      for(const [end,other] of [[w.a,w.b],[w.b,w.a]]){
+      const ends=[{...w.a},{...w.b}];
+      // Extend or trim adjoining partition caps to the selected curtain or
+      // passage face, without moving editable centerlines or hosted doors.
+      for(const [end,other,index] of [[w.a,w.b,0],[w.b,w.a,1]]){
         const outward=unit(sub(end,other));
         for(const curtain of walls.filter(c=>c.shell||['curtain','opening','window'].includes(c.style.kind))){
           if(!curtain.owners.some(c=>w.owners.some(o=>o.roomId===c.roomId)))continue;
@@ -938,9 +977,10 @@
           const hit=intersectLines(end,outward,face.a,u);
           if(!hit)continue;
           const extension=dot(sub(hit,end),outward);
-          if(extension>EPS&&extension<=Math.max(1,(curtain.style.thickness||6)/6))pieces.push(strip(end,hit,half));
+          if(Math.abs(extension)>EPS&&Math.abs(extension)<=Math.max(1,(curtain.style.thickness||6)/6))ends[index]=hit;
         }
       }
+      if(dot(sub(ends[1],ends[0]),sub(w.b,w.a))>EPS)pieces.push(strip(ends[0],ends[1],half));
       const door=w.style.kind==='door'?doorOpening(w):null;
       if(door)openings.push(strip(door.a,door.b,half+.01));
     });
@@ -1027,5 +1067,5 @@
     if(Math.abs(measure(size)-target)>.001)throw Error('That hatch size cannot be reached with the current outline and corridor cutouts.');
     return {[axis]:size};
   }
-  return {exteriorWallMass,columnSnapTargets,columnOutline,hatchMetrics,hatchSizePatch,roomFillContours,curtainFace,snapCorridorSegment,interiorOutline,offsetOutline,EPS,add,sub,mul,dot,cross,length,distance,unit,rotate,normalize,nearestAngle,edges,area,centroid,baseOutline,polygon,closest,inside,contains,overlaps,simple,inward,fitInside,alignToEdge,cornerFits,validBoundaryFit,validPlacement,settle,moveSelection,wallNetwork,shiftedEdge,wallReference,withManualOutline,shiftWall,snapWallDrag,sideLengthMove,doorOpening,wallJoins,wallMass,corridorPoint,corridorPolygon,validCorridor,corridorCuts,roomContours,contourArea,insideContours,contoursOverlap,secondarySnap,snapSelection,alignGroupBottom,alignRoomEdges,unionOutline,unionBoundarySegments,contactEdges};
+  return {snapFaceOffset,faceStyle,corridorDoorWalls,exteriorWallMass,columnSnapTargets,columnOutline,hatchMetrics,hatchSizePatch,roomFillContours,curtainFace,snapCorridorSegment,interiorOutline,offsetOutline,EPS,add,sub,mul,dot,cross,length,distance,unit,rotate,normalize,nearestAngle,edges,area,centroid,baseOutline,polygon,closest,inside,contains,overlaps,simple,inward,fitInside,alignToEdge,cornerFits,validBoundaryFit,validPlacement,settle,moveSelection,wallNetwork,shiftedEdge,wallReference,withManualOutline,shiftWall,snapWallDrag,sideLengthMove,doorOpening,wallJoins,wallMass,corridorPoint,corridorPolygon,validCorridor,corridorCuts,roomContours,contourArea,insideContours,contoursOverlap,secondarySnap,snapSelection,alignGroupBottom,alignRoomEdges,unionOutline,unionBoundarySegments,contactEdges};
 });

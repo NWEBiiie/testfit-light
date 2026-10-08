@@ -2,15 +2,16 @@
   'use strict';
   // Model-space feet only: never export screen pixels, wall poche or selection UI.
   function curves(source,{preserveXY=false}={}){
-    const model=H.migrate(JSON.parse(JSON.stringify(source))),entities=[...(model.rooms||[]),...(model.corridors||[])],network=G.wallNetwork(entities,model.settings?.thickness||6,model.boundaries||[]),doors=H.resolveAll(model.doors||[],entities,network),result=[],seen=new Set();
+    const model=H.migrate(JSON.parse(JSON.stringify(source))),entities=[...(model.rooms||[]),...(model.corridors||[])],network=G.wallNetwork(entities,model.settings?.thickness||6,model.boundaries||[]),doors=H.resolveAll(model.doors||[],entities,network,model.boundaries||[]),result=[],seen=new Set();
     const point=p=>({x:p.x,y:preserveXY?p.y:-p.y});
     const key=p=>`${p.x.toFixed(7)},${p.y.toFixed(7)}`;
     function line(layer,a,b){if(G.distance(a,b)<1e-7)return;const ends=[key(a),key(b)].sort(),id=layer+':'+ends.join('|');if(seen.has(id))return;seen.add(id);result.push({type:'LINE',layer,a:point(a),b:point(b)});}
-    for(const wall of network){
-      const kind=wall.style.kind;if(wall.shell||kind==='opening')continue;
+    for(const rawWall of network){
+      const kind=rawWall.style.kind;if(rawWall.shell||kind==='opening')continue;
+      const wall=kind==='curtain'?{...rawWall,...G.curtainFace(rawWall,entities)}:rawWall;
       const layer=kind==='curtain'?'CURTAINS':kind==='window'?'WINDOWS':'WALL_CENTERLINES',u=G.unit(G.sub(wall.b,wall.a)),len=G.distance(wall.a,wall.b),holes=[];
       if(layer==='WALL_CENTERLINES')for(const d of doors){
-        if(!wall.owners.some(o=>o.roomId===d.host.id))continue;
+        if(d.host.type!=='corridor'&&!wall.owners.some(o=>o.roomId===d.host.id))continue;
         if(Math.abs(G.cross(G.sub(d.a,wall.a),u))>1e-5||Math.abs(G.cross(G.sub(d.b,wall.a),u))>1e-5)continue;
         const offsets=[G.dot(G.sub(d.a,wall.a),u),G.dot(G.sub(d.b,wall.a),u)].sort((a,b)=>a-b);
         if(offsets[1]>0&&offsets[0]<len)holes.push([Math.max(0,offsets[0]),Math.min(len,offsets[1])]);
