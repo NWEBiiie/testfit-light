@@ -262,7 +262,7 @@
     doorViews=H.resolveAll(visibleDoors,rooms.concat(corridors),walls,model.boundaries);
     if(drag?.kind==='wall')selectedWall=wallForReference(wallSelectionAfter(drag.result,drag.reference))?.id||selectedWall;
     const unit=5*view.zoom,origin=screen({x:0,y:0});
-    let svg=`<defs><pattern id="grid" width="${unit}" height="${unit}" patternUnits="userSpaceOnUse" x="${origin.x%unit}" y="${origin.y%unit}"><path d="M${unit} 0 H0 V${unit}" fill="none" stroke="#dce4ed" stroke-width=".7"/></pattern></defs><rect width="100%" height="100%" fill="#f8fafc"/><rect width="100%" height="100%" fill="url(#grid)"/>`;
+    let svg=`<defs><pattern id="grid" width="${unit}" height="${unit}" patternUnits="userSpaceOnUse" x="${origin.x%unit}" y="${origin.y%unit}"><path d="M${unit} 0 H0 V${unit}" fill="none" stroke="#dce4ed" stroke-width=".7"/></pattern></defs><rect class="canvas-background" width="100%" height="100%" fill="#f8fafc"/><rect class="canvas-background" width="100%" height="100%" fill="url(#grid)"/>`;
     model.boundaries.forEach(b=>{const color=b.groupId?(getGroup(b.groupId)?.color||'#3675c8'):'#768699';svg+=`<path d="${path(b.points)}" fill="${b.groupId?'none':'#ffffff88'}" stroke="${color}" stroke-width="${b.groupId?1.5:2}" ${b.groupId?'stroke-dasharray="8 5"':''}/>`;});
     if(model.reference?.variant==='boundary'){
       const p=model.boundaries[0].points;
@@ -333,7 +333,10 @@
     if(drag?.kind==='marquee'&&drag.moved)svg+=drawMarquee();
     $('#isolationBar').hidden=!isolatedRoom;$('#isolationName').textContent=isolatedRoom?'Isolated · '+(getRoom(isolatedRoom)?.name||'Room'):'';
     plan.innerHTML=svg;plan.style.cursor=drawing||doorPlacement?'crosshair':'default';plan.classList.toggle('panning',drag?.kind==='pan');plan.classList.toggle('drawing-path',!!drawing||!!doorPlacement);
-    $('#zoom').value=view.zoom;$('#zoomValue').textContent=Math.round(view.zoom*10)+'%';$('#scaleBar').style.width=10*view.zoom+'px';
+    $('#zoom').value=view.zoom;
+    const screenScale=view.zoom*(plan.getScreenCTM()?.a||1),bar=window.LightPdf.scaleBar(screenScale);
+    $('#zoomValue').textContent=fmt(screenScale)+' px/ft';$('#zoomValue').title='Screen zoom only; PDF exports use 1/8 inch = 1 foot.';
+    $('#scaleBar').style.width=bar.pixels+'px';$('#scaleLabel').textContent=fmtLength(bar.feet);
     $('#wallCount').textContent=walls.filter(w=>w.owners.length>1).length+' shared wall segments';
   }
   function render(){renderNumbering();$('#addDoor').textContent=doorPlacement?'Stop adding doors':'＋ Add door';$('#addDoor').classList.toggle('active',!!doorPlacement);$('#addDoor').setAttribute('aria-pressed',String(!!doorPlacement));renderLists();draw();renderInspector();$('#undo').disabled=!undo.length;$('#redo').disabled=!redo.length;$('#finish').hidden=!drawing||!['poly','corridor'].includes(drawing.type);$('#finish').textContent=drawing?.type==='corridor'?'Stop drawing':'Finish boundary';$('#pathDrawingBar').hidden=drawing?.type!=='corridor';$('#corridorDirection').disabled=!!drawing;$('#pathDrawingHint').textContent=drawing?.drawMode==='free'?'Free angle · click end, then stop.':'90° corners · click end, then stop.';$('#resumeDrawing').hidden=!stoppedDrawing;$('#discardDraft').hidden=!stoppedDrawing;$('#cancel').hidden=!drawing;$('#undoPoint').hidden=!drawing||!['poly','corridor'].includes(drawing.type);}
@@ -922,6 +925,50 @@
   $('#drawCorridor').onclick=()=>beginCorridor();
   $('#zoom').oninput=e=>{view.zoom=Number(e.target.value);draw();};$('#zoomOut').onclick=()=>{view.zoom=Math.max(.5,view.zoom/1.2);draw();};$('#zoomIn').onclick=()=>{view.zoom=Math.min(35,view.zoom*1.2);draw();};$('#fit').onclick=fit;
   function download(name,contents,type){const url=URL.createObjectURL(new Blob([contents],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+  function pdfBounds(scope){
+    if(scope==='view')return {x:view.x-size.width/view.zoom/2,y:view.y-size.height/view.zoom/2,width:size.width/view.zoom,height:size.height/view.zoom};
+    const points=[...obstacles().flatMap(G.polygon),...model.boundaries.flatMap(b=>b.points),...(model.settings.columnsEnabled===false?[]:(model.columns||[]).filter(c=>c.enabled!==false).flatMap(G.columnOutline))];
+    // Include entrance/discharge annotations beyond the shell, not just geometry.
+    for(const p of model.portals||[]){points.push({x:p.x-3,y:p.y-2},{x:p.x+(15+String(p.name).length*8)/window.LightPdf.RENDER_PIXELS_PER_FOOT,y:p.y+1});}
+    if(!points.length)throw Error('There is no plan to export.');
+    const xs=points.map(p=>p.x),ys=points.map(p=>p.y),pad=Math.max(4,(model.settings.exteriorThickness||12)/12+2);
+    return {x:Math.min(...xs)-pad,y:Math.min(...ys)-pad,width:Math.max(...xs)-Math.min(...xs)+pad*2,height:Math.max(...ys)-Math.min(...ys)+pad*2};
+  }
+  function cleanPdfSvg(bounds){
+    // Re-render at a stable drawing resolution, not at a zoom-dependent paper scale.
+    // No model/history edits, and every editing/view state is restored synchronously.
+    const saved={view,size,selected,selectedWall,selectedDoor,activeCorridor,isolatedRoom,doorPlacement,drawing,stoppedDrawing,drag,preview,wallPreview};
+    try{
+      view={x:bounds.x+bounds.width/2,y:bounds.y+bounds.height/2,zoom:window.LightPdf.RENDER_PIXELS_PER_FOOT};
+      size={width:bounds.width*view.zoom,height:bounds.height*view.zoom};
+      selected=new Set();selectedWall=selectedDoor=activeCorridor=isolatedRoom=doorPlacement=drawing=stoppedDrawing=drag=preview=wallPreview=null;
+      draw();
+      const svg=plan.cloneNode(true);svg.querySelectorAll('.canvas-background,#grid,.wall-hit,.door-hit,title').forEach(el=>el.remove());
+      svg.removeAttribute('id');svg.removeAttribute('class');svg.removeAttribute('style');svg.removeAttribute('tabindex');
+      svg.setAttribute('xmlns','http://www.w3.org/2000/svg');svg.setAttribute('width',size.width);svg.setAttribute('height',size.height);svg.setAttribute('viewBox','0 0 '+size.width+' '+size.height);svg.setAttribute('font-family','Arial, Helvetica, sans-serif');
+      return new XMLSerializer().serializeToString(svg);
+    }finally{
+      ({view,size,selected,selectedWall,selectedDoor,activeCorridor,isolatedRoom,doorPlacement,drawing,stoppedDrawing,drag,preview,wallPreview}=saved);draw();
+    }
+  }
+  function updatePdfSheet(){
+    try{const s=window.LightPdf.sheet(pdfBounds($('#pdfScope').value),$('#pdfPaper').value);$('#pdfSheet').textContent=fmt(s.width/72)+' × '+fmt(s.height/72)+' in · 1/8" = 1\'-0"';$('#pdfDownload').disabled=false;}
+    catch(error){$('#pdfSheet').textContent=error.message;$('#pdfDownload').disabled=true;}
+  }
+  $('#exportPdf').onclick=()=>{$('#pdfError').textContent='';updatePdfSheet();$('#pdfDialog').showModal();};
+  $('#pdfCancel').onclick=()=>$('#pdfDialog').close();
+  $('#pdfScope').onchange=$('#pdfPaper').onchange=updatePdfSheet;
+  $('#pdfDownload').onclick=async()=>{
+    const button=$('#pdfDownload');button.disabled=true;button.textContent='Preparing…';$('#pdfError').textContent='';
+    try{
+      const bounds=pdfBounds($('#pdfScope').value),paper=$('#pdfPaper').value;
+      window.LightPdf.sheet(bounds,paper);const svg=cleanPdfSvg(bounds);
+      const result=await window.LightPdf.exportSvg(svg,bounds,paper);
+      download('testfit-light-1-8-scale.pdf',result.bytes,'application/pdf');$('#pdfDialog').close();
+      status('PDF exported at 1/8" = 1\'-0". Print Actual size / 100% — not Fit.');
+    }catch(error){$('#pdfError').textContent=error.message;status('PDF export failed: '+error.message);}
+    finally{button.textContent='Download PDF';updatePdfSheet();}
+  };
   $('#exportCsv').onclick=()=>{try{download('testfit-light-room-program.csv',exportProgramCsv(),'text/csv;charset=utf-8');status('CSV exported.');}catch(error){status('Program CSV export failed: '+error.message);}};
   $('#exportDxf').onclick=()=>{try{const preserveXY=false;download('testfit-light-centerlines.dxf',window.LightCad.exportDxf(model,{preserveXY}),'application/dxf');status('CAD centerlines exported · 1 unit = 1 foot · '+(preserveXY?'saved X/Y preserved.':'Y reversed to match the displayed plan.'));}catch(error){status('CAD export failed: '+error.message);}};
   $('#save').onclick=()=>{download('testfit-light.json',JSON.stringify(model,null,2),'application/json');status('Editable project saved.');};$('#open').onclick=()=>$('#file').click();
