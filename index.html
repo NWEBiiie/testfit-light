@@ -20,13 +20,13 @@
   </main>
   <nav class="mobile-nav"><a href="#canvasPanel">Plan</a><a href="#roomsPanel">Rooms</a><a href="#propertiesPanel">Properties</a></nav>
   <dialog id="pdfDialog" aria-labelledby="pdfTitle">
-    <h2 id="pdfTitle">Export PDF</h2>
+    <h2 id="pdfTitle">Export vector PDF</h2>
     <label>Content<select id="pdfScope"><option value="view">Current view</option><option value="plan">Whole plan</option></select></label>
     <label>Paper<select id="pdfPaper"><option value="auto">Auto sheet · exact scale</option><option value="letter">Letter · 8.5 × 11 in</option><option value="tabloid">Tabloid · 11 × 17 in</option><option value="archC">Arch C · 18 × 24 in</option><option value="archD">Arch D · 24 × 36 in</option></select></label>
     <p id="pdfSheet" role="status"></p>
-    <p class="hint">1/8″ = 1′-0″ · Print at Actual size / 100%. No grid or editing controls. Room colors remain.</p>
+    <p class="hint">Vector · 1/8″ = 1′-0″ · Print at Actual size / 100%. No grid or editing controls.</p>
     <p id="pdfError" class="danger" role="alert"></p>
     <div class="pdf-actions"><button id="pdfCancel" type="button">Cancel</button><button id="pdfDownload" type="button" class="primary">Download PDF</button></div>
   </dialog>
-  <script src="pdf-export.js?v=pdf-scale-74"></script><script src="geometry.js?v=corridor-wall-edge-73"></script><script src="edit-tools.js?v=solid-wall-snap-71"></script><script src="hosted-doors.js?v=solid-wall-snap-71"></script><script src="cad-export.js?v=solid-wall-snap-71"></script><script src="default-project.js?v=solid-wall-snap-71"></script><script src="september-studies.js?v=solid-wall-snap-71"></script><script src="app.js?v=pdf-scale-74"></script>
+  <script src="pdf-vendor.js?v=vector-pdf-75"></script><script src="pdf-export.js?v=vector-pdf-75"></script><script src="geometry.js?v=corridor-wall-edge-73"></script><script src="edit-tools.js?v=solid-wall-snap-71"></script><script src="hosted-doors.js?v=solid-wall-snap-71"></script><script src="cad-export.js?v=solid-wall-snap-71"></script><script src="default-project.js?v=solid-wall-snap-71"></script><script src="september-studies.js?v=solid-wall-snap-71"></script><script src="app.js?v=pdf-scale-74"></script>
 </body></html>

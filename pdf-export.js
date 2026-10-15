@@ -1,7 +1,7 @@
 (function(root,factory){if(typeof module==='object'&&module.exports)module.exports=factory();else root.LightPdf=factory();})(typeof window!=='undefined'?window:globalThis,function(){
   'use strict';
   // Architectural 1/8 inch = 1 foot: 72 PDF points/inch / 8 = 9 points/foot.
-  const POINTS_PER_FOOT=9,RENDER_PIXELS_PER_FOOT=12,DPI=300;
+  const POINTS_PER_FOOT=9,RENDER_PIXELS_PER_FOOT=12;
   const papers={letter:[612,792],tabloid:[792,1224],archC:[1296,1728],archD:[1728,2592]};
   function scaleBar(pixelsPerFoot){
     if(!Number.isFinite(pixelsPerFoot)||pixelsPerFoot<=0)throw Error('Invalid display scale.');
@@ -20,41 +20,55 @@
       [width,height]=fit;
     }
     if(Math.max(width,height)>14400)throw Error('Sheet exceeds the PDF page-size limit. Zoom in and export Current view.');
-    const pixelWidth=Math.ceil(drawingWidth/72*DPI),pixelHeight=Math.ceil(drawingHeight/72*DPI);
-    if(Math.max(pixelWidth,pixelHeight)>16384||pixelWidth*pixelHeight>48e6)throw Error('Drawing is too large for a sharp 300 dpi export. Zoom in and use Current view.');
-    return {width,height,drawingWidth,drawingHeight,x:(width-drawingWidth)/2,y:(height-drawingHeight)/2,pixelWidth,pixelHeight};
+    return {width,height,drawingWidth,drawingHeight,x:(width-drawingWidth)/2,y:(height-drawingHeight)/2};
   }
-  function jpegPdf(jpeg,layout){
-    if(!(jpeg instanceof Uint8Array)||jpeg[0]!==255||jpeg[1]!==216)throw Error('Invalid PDF image.');
-    for(const key of ['width','height','drawingWidth','drawingHeight','x','y','pixelWidth','pixelHeight'])if(!Number.isFinite(layout[key]))throw Error('Invalid PDF sheet.');
-    const enc=new TextEncoder(),parts=[],offsets=[0];let length=0;
-    const push=value=>{const b=typeof value==='string'?enc.encode(value):value;parts.push(b);length+=b.length;};
-    const number=n=>Number(n.toFixed(6));
-    const object=(id,body)=>{offsets[id]=length;push(id+' 0 obj\n'+body+'\nendobj\n');};
-    push('%PDF-1.4\n% TestFit Light\n');
-    object(1,'<< /Type /Catalog /Pages 2 0 R >>');
-    object(2,'<< /Type /Pages /Kids [3 0 R] /Count 1 >>');
-    object(3,'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 '+number(layout.width)+' '+number(layout.height)+'] /Resources << /XObject << /Plan 4 0 R >> >> /Contents 5 0 R >>');
-    offsets[4]=length;push('4 0 obj\n<< /Type /XObject /Subtype /Image /Width '+layout.pixelWidth+' /Height '+layout.pixelHeight+' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length '+jpeg.length+' >>\nstream\n');push(jpeg);push('\nendstream\nendobj\n');
-    const content='q\n'+number(layout.drawingWidth)+' 0 0 '+number(layout.drawingHeight)+' '+number(layout.x)+' '+number(layout.y)+' cm\n/Plan Do\nQ\n';
-    object(5,'<< /Length '+enc.encode(content).length+' >>\nstream\n'+content+'endstream');
-    object(6,'<< /Title (TestFit Light - 1/8 inch = 1 foot) /Subject (Architectural scale 1:96. Print at Actual size / 100 percent, never Fit.) /Creator (TestFit Light) >>');
-    const xref=length;push('xref\n0 7\n0000000000 65535 f \n');
-    for(let id=1;id<=6;id++)push(String(offsets[id]).padStart(10,'0')+' 00000 n \n');
-    push('trailer\n<< /Size 7 /Root 1 0 R /Info 6 0 R >>\nstartxref\n'+xref+'\n%%EOF\n');
-    const result=new Uint8Array(length);let cursor=0;for(const part of parts){result.set(part,cursor);cursor+=part.length;}return result;
+  function vectorSvg(source){
+    const doc=new DOMParser().parseFromString(source,'image/svg+xml'),svg=doc.documentElement,ns='http://www.w3.org/2000/svg';
+    if(doc.querySelector('parsererror')||svg.localName!=='svg')throw Error('Invalid drawing SVG.');
+    // Only generated vector primitives; never load or rasterize external content.
+    const allowed=new Set(['svg','g','defs','path','rect','line','polyline','polygon','circle','ellipse','text','tspan','clipPath','pattern','mask','title']);
+    for(const el of [svg,...svg.querySelectorAll('*')]){
+      if(!allowed.has(el.localName))throw Error('Unsupported non-vector drawing element: '+el.localName);
+      for(const a of [...el.attributes])if(/^on/i.test(a.name)||/href$/i.test(a.name)||a.name==='style'&&/@import|url\(/i.test(a.value)||/url\(\s*['"]?(?!#)/i.test(a.value))throw Error('External drawing resources are not supported in vector PDF.');
+      if(el.hasAttribute('filter'))throw Error('Raster SVG filters are not supported in vector PDF.');
+      if(el.hasAttribute('font-family'))el.setAttribute('font-family','helvetica');
+      if(el.hasAttribute('font-weight'))el.setAttribute('font-weight',el.getAttribute('font-weight')==='bold'||Number(el.getAttribute('font-weight'))>=600?'bold':'normal');
+      // PDF text paints fill before stroke; SVG's stroke-first white halo would
+      // otherwise cover the letters. Keep readable, selectable colored text.
+      if(['text','tspan'].includes(el.localName)){el.removeAttribute('stroke');el.removeAttribute('stroke-width');el.removeAttribute('paint-order');}
+    }
+    const defs=doc.createElementNS(ns,'defs');svg.prepend(defs);let id=0;
+    // Convert screen luminance masks to real vector holes. Intersecting the
+    // complement of each opening correctly subtracts overlapping door cutouts.
+    for(const target of [...svg.querySelectorAll('[mask]')]){
+      const ref=target.getAttribute('mask').match(/^url\(#([^)]*)\)$/),mask=ref&&doc.getElementById(ref[1]);
+      if(!mask||mask.localName!=='mask')throw Error('Invalid wall cutout.');
+      const width=Number(svg.getAttribute('width')),height=Number(svg.getAttribute('height'));
+      if(!(width>0&&height>0))throw Error('Invalid vector drawing extent.');
+      for(const cut of mask.querySelectorAll('path')){
+        if(!['black','#000','#000000'].includes(cut.getAttribute('fill')))throw Error('Unsupported wall cutout.');
+        const d=cut.getAttribute('d')||'';
+        if(/[^MLZ\d\s.,e+\-]/i.test(d))throw Error('Unsupported wall cutout path.');
+        for(const polygon of d.match(/M[^M]+/gi)||[]){
+          const clip=doc.createElementNS(ns,'clipPath'),hole=doc.createElementNS(ns,'path'),group=doc.createElementNS(ns,'g'),key='pdf-cut-'+id++;
+          clip.setAttribute('id',key);clip.setAttribute('clipPathUnits','userSpaceOnUse');
+          hole.setAttribute('d',`M0 0H${width}V${height}H0Z ${polygon}`);hole.setAttribute('clip-rule','evenodd');hole.setAttribute('fill-rule','evenodd');clip.append(hole);defs.append(clip);
+          group.setAttribute('clip-path','url(#'+key+')');target.parentNode.insertBefore(group,target);group.append(target);
+        }
+      }
+      target.removeAttribute('mask');
+    }
+    svg.querySelectorAll('mask,title').forEach(el=>el.remove());
+    return svg;
   }
-  async function exportSvg(svg,bounds,paper='auto'){
-    const layout=sheet(bounds,paper),canvas=document.createElement('canvas');canvas.width=layout.pixelWidth;canvas.height=layout.pixelHeight;
-    const ctx=canvas.getContext('2d');if(!ctx)throw Error('PDF rendering is unavailable in this browser.');
-    const url=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml;charset=utf-8'})),image=new Image();
-    try{
-      await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(Error('Could not render the drawing for PDF.'));image.src=url;});
-      // Only the paper is white; no screen grid or app backdrop is drawn.
-      ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(image,0,0,canvas.width,canvas.height);
-      const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.98));if(!blob)throw Error('The drawing is too large to render.');
-      return {bytes:jpegPdf(new Uint8Array(await blob.arrayBuffer()),layout),layout};
-    }finally{URL.revokeObjectURL(url);canvas.width=canvas.height=0;}
+  async function exportSvg(source,bounds,paper='auto'){
+    const layout=sheet(bounds,paper),svg=vectorSvg(source),JsPDF=globalThis.jspdf?.jsPDF;
+    if(!JsPDF||typeof JsPDF.API.svg!=='function')throw Error('Vector PDF libraries did not load. Reload and try again.');
+    const pdf=new JsPDF({orientation:layout.width>layout.height?'landscape':'portrait',unit:'pt',format:[layout.width,layout.height],putOnlyUsedFonts:true,compress:true,floatPrecision:8});
+    pdf.setProperties({title:'TestFit Light - vector - 1/8 inch = 1 foot',subject:'Vector paths and text. Architectural scale 1:96. Print at Actual size / 100 percent, never Fit.',creator:'TestFit Light'});
+    // Map the SVG viewBox to an exact physical rectangle. No bitmap/DPI step.
+    await pdf.svg(svg,{x:layout.x,y:layout.y,width:layout.drawingWidth,height:layout.drawingHeight,loadExternalStyleSheets:false});
+    return {bytes:new Uint8Array(pdf.output('arraybuffer')),layout};
   }
-  return {POINTS_PER_FOOT,RENDER_PIXELS_PER_FOOT,DPI,scaleBar,sheet,jpegPdf,exportSvg};
+  return {POINTS_PER_FOOT,RENDER_PIXELS_PER_FOOT,scaleBar,sheet,vectorSvg,exportSvg};
 });
